@@ -2,9 +2,11 @@
 import math
 from pathlib import Path
 import struct
+from xml.etree import ElementTree as ET
 
 import numpy as np
 from PIL import Image
+from luna_kit.gameobjectdata import GameObjectData
 
 
 def write_fixture(folder: Path) -> None:
@@ -54,3 +56,50 @@ def write_fixture(folder: Path) -> None:
     image.putdata([(40, 180, 210, 255) if (x // 4 + y // 4) % 2 == 0 else (255, 205, 60, 255)
                    for y in range(16) for x in range(16)])
     image.save(folder / "flag.png")
+
+
+def write_native_tables(folder, declarations=None):
+    """Declare synthetic resources using the real native table field names."""
+    folder = Path(folder)
+    if declarations is None:
+        declarations = {'Synthetic_Flag': {'model': 'flag', 'animation': 'flag', 'events': 'flag'}}
+    (folder/'gameobjectcategorydata.xml').write_text('''<Categories>
+<GameObjectCategory Name="Pony">
+<Parameter Name="Model"><Attribute Name="MediumLOD" Type="string"/></Parameter>
+<Parameter Name="Animation" Optional="1">
+ <Attribute Name="Rig_MediumLOD" Type="string"/>
+ <Attribute Name="AnimationEventsXML" Type="string"/>
+ <Attribute Name="LeftIdleAnimationList" Type="stringWithDefault" Array="20"/>
+</Parameter>
+<Parameter Name="Conversation" Optional="1"><Attribute Name="IdleAnimation" Type="string"/></Parameter>
+<Parameter Name="Eyes" Optional="1">
+ <Attribute Name="EyeSubObject_Open" Type="stringWithDefault" Array="2" DefaultValue="eyes_open"/>
+ <Attribute Name="EyeSubObject_Closed" Type="stringWithDefault" Array="2" DefaultValue="eyes_shut"/>
+ <Attribute Name="EyeSubObject_Happy" Type="stringWithDefault" Array="2" DefaultValue="eyes_happy"/>
+ <Attribute Name="EyeSubObject_Frown" Type="stringWithDefault" Array="2" DefaultValue="eyes_frown"/>
+</Parameter>
+<Parameter Name="Sets"><Attribute Name="Sets" Type="stringWithDefault" Array="35"/></Parameter>
+</GameObjectCategory></Categories>''', encoding='utf-8')
+    root = ET.Element('GameObjects')
+    category = ET.SubElement(root, 'Category', ID='Pony')
+    for identity, declaration in declarations.items():
+        obj = ET.SubElement(category, 'GameObject', ID=identity)
+        ET.SubElement(obj, 'Model', MediumLOD=declaration['model'])
+        animation = ET.SubElement(obj, 'Animation', Rig_MediumLOD=declaration['animation'],
+                                  AnimationEventsXML=declaration['events'])
+        idle_list = ET.SubElement(animation, 'LeftIdleAnimationList')
+        ET.SubElement(idle_list, 'Item', Value='wave')
+        ET.SubElement(obj, 'Conversation', IdleAnimation='rest')
+        eyes = ET.SubElement(obj, 'Eyes')
+        # A synthetic flag is deliberately its own declared visible mesh. This
+        # is a fixture contract, not a fallback for real characters' eye groups.
+        opened = ET.SubElement(eyes, 'EyeSubObject_Open')
+        ET.SubElement(opened, 'Item', Value='flag')
+        for state in ['Closed', 'Happy', 'Frown']:
+            ET.SubElement(eyes, 'EyeSubObject_' + state)
+        ET.SubElement(ET.SubElement(obj, 'Sets'), 'Sets')
+    ET.ElementTree(root).write(folder/'gameobjectdata.xml', encoding='utf-8')
+    (folder/'shopdata.xml').write_text('<ShopData/>', encoding='utf-8')
+    (folder/'defaultGameCampaign.json').write_text('{"game_object_data":{}}', encoding='utf-8')
+    return GameObjectData(folder/'gameobjectdata.xml', folder/'shopdata.xml',
+                          folder/'gameobjectcategorydata.xml')

@@ -10,8 +10,7 @@ from unittest.mock import patch
 from xml.etree import ElementTree as ET
 
 from bootstrap import ROOT
-from native_fixture import write_fixture
-from make_model_demo import make_demo, write_native_tables
+from native_fixture import write_fixture, write_native_tables
 from game_data import model_gen
 from luna_kit.gameobjectdata import GameObjectData
 
@@ -510,17 +509,6 @@ class ModelGeneration(unittest.TestCase):
         self.assertEqual((self.dist/'models_3d.json').read_bytes(), previous)
         self.assertEqual(report['generation']['unreferenced_local_assets'], [stale.relative_to(self.dist).as_posix()])
         self.assertTrue(stale.exists())
-
-    def test_driver_creates_new_assets_with_metadata_outside_and_refuses_existing_path(self):
-        destination = self.root/'demo'
-        summary = make_demo(destination)
-        self.assertEqual(summary['converted'], 1)
-        self.assertEqual(Path(summary['assets']), (destination/'assets').resolve())
-        self.assertFalse(Path(summary['report']).is_relative_to(Path(summary['assets'])))
-        before = (destination/'assets/models_3d.json').read_bytes()
-        with self.assertRaises(FileExistsError):
-            make_demo(destination)
-        self.assertEqual((destination/'assets/models_3d.json').read_bytes(), before)
 
     def test_real_ponyset_glb_keeps_identity_and_applies_linked_slot_over_defaults(self):
         self.prepare_wardrobe()

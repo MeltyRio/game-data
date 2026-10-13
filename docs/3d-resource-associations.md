@@ -349,20 +349,26 @@ model version is supported: a stale catalogue or a partial failed upload can
 temporarily fail digest verification. No automatic restoration or new version
 management layer is introduced.
 
-## Safe tests and demonstration
+## Offline tests and local model review
 
 After the [locked Python >=3.14 setup](../README.md#setup), run from this repository:
 
 ```sh
 uv run --no-sync python -m unittest discover -s tests -v
-uv run --no-sync python tests/make_model_demo.py --output /tmp/atp-model-demo
 ```
 
-The second command requires a new directory and uses self-authored object tables,
-RK/ANIM, material and texture bytes. It calls the same generation stage, writing
-private `raw/` and public `assets/` separately. Point ATP's `MODEL_VIEWER_ASSETS`
-at that `assets/` folder for its validator and actual Chromium playback tests.
-Never run full-data sync against a fixture-only directory.
+These tests use self-authored native-format inputs and do not require game
+resources or cloud credentials. They check conversion and pipeline behavior;
+they do not demonstrate the appearance of real characters.
+
+To review real models, run the normal game-data build with your locally available
+game resources (see [setup](../README.md#setup) and `game-data build --help`), then point ATP's
+`MODEL_VIEWER_ASSETS` at the generated `dist/` directory. ATP's
+[local model demo](https://github.com/all-the-ponies/all-the-ponies/pull/35)
+loads the generated catalogue and lets you select available Pony, Pet and
+Costume models with their animations. No domain or production upload is needed.
+Keep game resources and generated assets outside the source checkout; do not
+commit them or run full-data sync against a partial test directory.
 
 Offline tests bootstrap only the source package namespace to avoid CLI/cloud
 initialization; they do not replace production dependencies. The pipeline wiring

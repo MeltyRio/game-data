@@ -16,8 +16,7 @@ from bootstrap import ROOT
 from game_data import extractor, model_associations as audit, model_gen
 from luna_kit.ark import ARK
 from rich.console import Console
-from make_model_demo import write_native_tables
-from native_fixture import write_fixture
+from native_fixture import write_fixture, write_native_tables
 from test_extractor import write_ark
 
 
