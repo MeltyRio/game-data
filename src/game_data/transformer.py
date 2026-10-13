@@ -1211,7 +1211,7 @@ class Transformer:
                 costume_info.can_be_new = costume.get('PonySet', {}).get('CanBeNew', False)
                 costume_info.is_only_alternate_mesh = costume.get('PonySet', {}).get('IsOnlyAlternativeMesh', False)
                 costume_info.is_subset = costume.get('PonySet', {}).get('IsSubSet', False)
-                costume_info.subsets = costume.get('PonySet', {}).get('SubSets', [])
+                costume_info.subsets = list(costume.get('PonySet', {}).get('SubSets', []))
                 if costume_info.subsets:
                     costume_info.subsets.insert(0, costume.id)
 

@@ -1,12 +1,29 @@
 # game-data
 
-This script reads and transforms the mlp game data to be used for [All The Ponies](https://all-the-ponies.com/). The assets are uploaded to https://assets.all-the-ponies.com/, which is a Cloudflare R2 bucket. This script is not meant to be run without an s3-like bucket, and you do need some expertise to run anything (the below is mostly just for me to remember commands).
+This script reads and transforms the mlp game data to be used for [All The Ponies](https://all-the-ponies.com/). The assets can be uploaded to https://assets.all-the-ponies.com/, which is a Cloudflare R2 bucket. Uploading and remote version checks require an S3-like bucket. Synthetic tests and local builds with an explicit game version and existing inputs do not.
 
 # Setup
 
 If you want to run this yourself, you need a few things.
 
-In a `.env` file, or just setting these environment variables, you can configure the S3-like bucket. Note: the script won't work without one.
+Use Python 3.14 or newer and uv. Building the locked dependencies requires native
+development tools, including a C compiler, pkg-config, Cairo, GObject Introspection,
+Pango and protoc. The [Dockerfile](Dockerfile) lists the Linux system dependencies;
+its x86-64 paths/downloads are not an Apple Silicon installation recipe. Install
+the corresponding native libraries for your platform, then use the existing lock:
+
+```shell
+uv sync --locked
+uv run --no-sync game-data --help
+uv run --no-sync game-data build --help
+```
+
+Keep the default dependency groups: the current CLI imports `python-dotenv`,
+which is in the dev group. Full image generation also needs Java, FFDec and FFmpeg;
+the synthetic 3D tests below do not run that image stage.
+
+For uploads, configure an S3-like bucket in `.env.dev` (the default/dev mode),
+`.env.prod` (with `--env prod`), or exported environment variables:
 
 ```shell
 S3_ENDPOINT=http://localhost:3000
@@ -22,10 +39,10 @@ You need to get [ffdec](https://github.com/jindrapetrik/jpexs-decompiler/), and 
 
 You also need to first install the `cairo` headers. Instructions can be found here: https://pycairo.readthedocs.io/en/latest/getting_started.html
 
-And of course to actually run it
+To run the full pipeline and upload its output:
 
 ```shell
-uv run game-data --version latest --upload
+uv run game-data build --version latest --upload
 ```
 
 If all of this is too complicated, you can just use the docker container.
@@ -59,3 +76,10 @@ PRIVATE_S3_BUCKET=private-bucket
 ```
 
 The s3 bucket is for when you're running this on a system that doesn't have persistent storage.
+
+## Optional 3D resources
+
+The normal build includes native model/animation generation after Transformer.
+See [source associations, scope, safe tests and publication](docs/3d-resource-associations.md).
+Use `--skip model_gen` to skip this stage; generated resources share the existing
+dist directory, sync process and root manifest.
