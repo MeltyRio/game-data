@@ -361,17 +361,130 @@ These tests use self-authored native-format inputs and do not require game
 resources or cloud credentials. They check conversion and pipeline behavior;
 they do not demonstrate the appearance of real characters.
 
-To review real models, run the normal game-data build with your locally available
-game resources (see [setup](../README.md#setup) and `game-data build --help`), then point ATP's
-`MODEL_VIEWER_ASSETS` at the generated `dist/` directory. ATP's
-[local model demo](https://github.com/all-the-ponies/all-the-ponies/pull/35)
-loads the generated catalogue and lets you select available Pony, Pet and
-Costume models with their animations. No domain or production upload is needed.
-Keep game resources and generated assets outside the source checkout; do not
-commit them or run full-data sync against a partial test directory.
-
 Offline tests bootstrap only the source package namespace to avoid CLI/cloud
 initialization; they do not replace production dependencies. The pipeline wiring
 and uploader tests execute actual functions with isolated/mocked external
 services. Passing those tests does not claim a complete CLI download/extract/
 Transformer/image/upload run, production R2 validation or physical Safari testing.
+
+## Prepare real game resources for local review
+
+If you already have a completed output from this PR containing `models_3d.json`
+and every referenced file under `models/3d/`, use it directly with the
+[ATP demo instructions](https://github.com/MeltyRio/all-the-ponies/blob/feature/3d-model-viewer/docs/3d-model-viewer.md#run-the-demo-with-game-models).
+The viewer needs neither raw game files nor Python in that case. A normal older
+game-data output without the catalogue cannot display 3D models.
+
+To generate your own output, check out the producer PR in a new directory:
+
+```sh
+git clone --branch codex/3d-resource-association --single-branch \
+  https://github.com/MeltyRio/game-data.git game-data-3d-review
+cd game-data-3d-review
+```
+
+Complete the [Python 3.14+, uv and native dependency setup](../README.md#setup),
+including the default dependency groups, then run:
+
+```sh
+uv sync --locked
+uv run --no-sync game-data --help
+uv run --no-sync game-data build --help
+```
+
+Use a complete, successfully extracted resource tree from the existing
+game-data/Luna extraction workflow for one known game version. Keep its original
+filenames, case and directories. Do not assemble a release by mixing historical
+files with current tables. The important input categories are:
+
+| Input | Why it is needed |
+| --- | --- |
+| `gameobjectdata.xml`, `shopdata.xml`, `gameobjectcategorydata.xml`, `defaultGameCampaign.json` | Object IDs, native model/animation references, outfit declarations and campaign data. |
+| `data_ver.xml`, `questmanager.xml`, `*.loc`, and the other normal game-data tables, images and SWFs | The normal Transformer still processes the game's data before model generation. Keep its complete usual inputs, including extracted atlas images. |
+| Referenced `.rk` models | Geometry, skeleton and named visible parts. |
+| Declared library `.anim` and matching `.csv` | Animation frames and native clip names/ranges. These are resolved from native declarations, not paired by guessing. |
+| Native `.rkm`, `.pvr`, `.alpha.pvr` and `.png` dependencies | Materials and textures. Retain RKM files that exist in the release; only a genuinely absent native RKM may use the verified default. |
+| Referenced controller `.xml` and required `.rkvs`/`.rkps` shader sources | Appearance/event checks and supported special material behavior. |
+
+For example, the verified 11.4.3c Twilight declaration resolves to
+`pony_twilight_set_lod1.rk` and the `pony_type01.anim` / `pony_type01.csv` library,
+with `pony_type01.xml` for controller checks. Its materials and textures are
+additional dependencies. These names illustrate the native association; they
+are not a minimal input pack for the whole build. APKs, client `.so` binaries,
+private research reports, saved games and player accounts are not runtime
+inputs to this extracted-input build.
+
+Keep the input and output outside both source checkouts, for example:
+
+```text
+review-input/
+  extracted/
+    gameobjectdata.xml
+    defaultGameCampaign.json
+    ...the complete same-version extracted tree...
+review-output/                  # a new destination for this build
+```
+
+`--raw` names `review-input`, not `review-input/extracted`. The existing extractor
+normally reads archives under `raw/arks`; the following command reuses an
+already extracted tree, so it requires no ARK or APK files in that directory.
+From the game-data checkout, run:
+
+```sh
+uv run --no-sync game-data --env dev build \
+  --version 11.4.3c \
+  --raw /absolute/path/to/review-input \
+  --output /absolute/path/to/review-output \
+  --skip download extract image_gen
+```
+
+Replace the version with the version of your inputs. This uses the normal CLI,
+Transformer and model generation. Use a new output path: the normal build clears
+that destination before Transformer. It writes `model-associations.json` under
+raw, outside the public output. `--skip extract` makes the caller responsible for
+complete, successfully extracted inputs; it cannot detect earlier extraction
+failures. If you only have archives, first obtain a successful extraction through
+the existing workflow; this guide does not establish that an arbitrary archive
+subset or a new download is complete.
+
+`--skip image_gen` skips the later image-generation stage, not Transformer's own
+image/SWF work. Java, FFDec and FFmpeg may still be required; pass
+`--ffdec /absolute/path/to/ffdec.jar` if FFDec is not on PATH. Do not skip transform
+for a new empty output. The explicit-version command above does not download or
+upload, and needs no S3 credentials or Play account. Do not add `--upload` or
+`--force`, or use the README's upload example/default Docker command for this
+local review.
+
+After a successful build, check that the intended pony has both a model and
+animations before opening the viewer:
+
+```sh
+uv run --no-sync python - /absolute/path/to/review-output <<'PY'
+import json
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+catalogue = json.loads((root / "models_3d.json").read_text())
+row = catalogue["models"].get("Pony_Twilight_Sparkle")
+if not row or not row.get("animations"):
+    raise SystemExit("Twilight or her clips were not generated; inspect raw/model-associations.json")
+for asset in [row, *row["animations"]]:
+    if not (root / asset["path"]).is_file():
+        raise SystemExit("Missing generated file: " + asset["path"])
+print(row["path"])
+print("Available animations:", ", ".join(clip["name"] for clip in row["animations"]))
+PY
+```
+
+This is an availability check; the viewer separately verifies GLB sizes, hashes
+and rig metadata. A successful build can exclude unsupported objects or actions.
+For a missing ID, inspect `generation.excluded` and `identities[ObjectID]` in the
+private `raw/model-associations.json` report. Do not substitute a similar model
+or suppress its diagnostic to make the demo appear successful.
+
+Point ATP's `MODEL_VIEWER_ASSETS` at the complete `review-output` and follow the
+linked viewer instructions. Select Twilight and click a listed animation; the
+parent starts at rest rather than autoplaying. No domain, bucket or deployment
+is needed. Game resources and generated GLBs are not bundled with either PR;
+keep them private and do not sync a partial review directory to production.
