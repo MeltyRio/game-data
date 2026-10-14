@@ -206,11 +206,9 @@ compaction. Empty primitives are omitted; an entirely empty model is rejected.
 No weight is assigned to a guessed bone, and rig keys and animation GLBs retain
 the existing contract.
 
-This branch requires the exact reviewed `rkshader.rkvs`, `rkshadercore.rkvs` and
-`rkshader.rkps` source digests from the caller's extracted closure. The ordinary
-material check still applies. A changed/missing shader, a triangle mixing zero
-and nonzero vertices, or nonzero normalization error is not covered. Models
-without selected zero-weight vertices do not gain a shader dependency.
+This branch applies to the supported `rkshader` material profile without requiring
+shader source files. A triangle mixing zero and nonzero vertices or a nonzero
+normalization error remains unsupported.
 
 The evidence is the Android 11.4.2a GPU material/skin-buffer path plus the
 reviewed 11.4.3c shader sources; the CPU skinning fallback and future source
@@ -219,11 +217,11 @@ to ordinary `rkshader`; special-shader zero-weight triangles remain unsupported.
 
 ## Reviewed native material controls
 
-The following narrow rules use the 11.4.3c / 1143002 native client (library SHA256
-`d4fc2e7650ae866735d4a9a1da4b900262bdcf188f1d34fb9c0ebe6b08609c29`) and
-exact shader-source hashes recorded in `native.py`. Missing or changed sources
-fail rather than receiving an ordinary-material substitute. The hashes guard
-shader semantics, not character IDs. Native shader files stay outside this repo.
+The following rules were verified against the 11.4.3c / 1143002 native client
+and shader sources. RKM shader names select these implemented material behaviors;
+conversion does not load or execute shader source files. Unknown shaders and
+unsupported controls remain errors; future shader semantics are not automatically
+supported.
 
 For `rkshader_horn`, an undeclared native GPU UserVector is zero. The reviewed
 fragment shader discards every pixel when x < .001. With no explicit RKM vector,

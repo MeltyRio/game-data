@@ -1,12 +1,10 @@
-"""Self-authored geometry; shader digest mocks contain no game shader bytes."""
+"""Native material behavior from self-authored resources, without shader files."""
 from __future__ import annotations
 
-import hashlib
 import struct
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 import numpy as np
 
@@ -53,18 +51,8 @@ class ZeroWeightTriangleTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.folder = Path(self.temp.name)
         fixture(self.folder)
-        # Only mock the reviewed fingerprints for synthetic files. The loader
-        # still performs real filesystem reads and SHA-256 comparisons.
-        self.digests = {}
-        for name in ('rkshader.rkvs', 'rkshadercore.rkvs', 'rkshader.rkps'):
-            data = ('synthetic shader source: ' + name).encode()
-            (self.folder / name).write_bytes(data)
-            self.digests[name] = hashlib.sha256(data).hexdigest()
-        self.mock = patch('game_data.model_gen.converter.native._ZERO_WEIGHT_SHADER_SOURCES', self.digests)
-        self.mock.start()
 
     def tearDown(self):
-        self.mock.stop()
         self.temp.cleanup()
 
     def kwargs(self, visible=('body',)):
@@ -94,5 +82,3 @@ class ZeroWeightTriangleTests(unittest.TestCase):
         current = self.bundle()
         self.assertEqual(current.files, baseline.files)
         self.assertEqual(current.catalogue, baseline.catalogue)
-        self.assertEqual(evidence['shader_sources'], self.digests)
-        self.assertTrue(set(self.digests).issubset({p['name'] for p in native['provenance']['files']}))

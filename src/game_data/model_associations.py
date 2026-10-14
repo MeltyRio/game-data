@@ -57,7 +57,8 @@ def _model(path):
         raise AssociationError('Unsupported or cyclic native hierarchy')
     return {'bone_count': len(bones), 'parents': [b.parentIndex for b in bones],
             'bone_names': [b.name for b in bones],
-            'meshes': [m.name for m in model.meshes]}
+            'meshes': [m.name for m in model.meshes],
+            'materials': [material.name for material in model.materials]}
 
 
 def _animation(path):

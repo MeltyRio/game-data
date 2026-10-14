@@ -9,7 +9,7 @@ from ..model_associations import discover_associations, write_association_report
 from ..model_paths import asset_digest, is_asset_path, model_path
 from .converter import ConversionError
 from .converter.export import convert_native
-from .converter.native import NativeInputError
+from .converter.native import NativeInputError, material_dependency_names
 from .selection import SelectionError, select_native_view
 from .interactions import InteractionError, prepare_interactions
 from .native_emitter import load_native_emitter
@@ -35,6 +35,20 @@ def _render_override(campaign, category, identity):
             return any(visit(v) for v in value)
         return False
     return visit(override)
+
+
+def _check_failed_materials(folder, model, failed_paths):
+    """A known extraction failure cannot use absent-RKM or suffix fallback."""
+    for material in model['materials']:
+        for name in material_dependency_names(material):
+            path = (folder/name).resolve()
+            if path in failed_paths:
+                raise SelectionError('material_extraction_failed',
+                    f'RKM extraction failed for {model["file"]}: {name}')
+            # Match converter precedence: an existing exact source wins over
+            # its optional source-art suffix alternative, including failures.
+            if path.is_file():
+                break
 
 
 def _publish_local(stage, dist, catalogue):
@@ -73,7 +87,7 @@ def _publish_local(stage, dist, catalogue):
 
 
 def generate_models(native_objects, extracted_dir, dist_dir, report_path, *, campaign,
-                    public_identities=None, display_profile='ponybook-preferred'):
+                    public_identities=None, display_profile='ponybook-preferred', failed_rkms=()):
     """Discover and convert supported objects; all other objects get diagnostics.
 
     Normal callers pass Transformer inputs and public GameData IDs. There is no
@@ -82,6 +96,8 @@ def generate_models(native_objects, extracted_dir, dist_dir, report_path, *, cam
     if not isinstance(campaign, dict):
         raise ValueError('The current parsed defaultGameCampaign is required')
     folder, dist, report_path = Path(extracted_dir), Path(dist_dir), Path(report_path)
+    failed_rkms = set(failed_rkms)
+    failed_paths = {(folder/name).resolve() for name in failed_rkms}
     if report_path.resolve().is_relative_to(dist.resolve()):
         raise ValueError('Private 3D report must stay outside public dist')
     report = discover_associations(native_objects, folder)
@@ -92,6 +108,7 @@ def generate_models(native_objects, extracted_dir, dist_dir, report_path, *, cam
                           'policy': 'unverified visual overrides exclude the affected object'}
     report['source_policy'] = 'Use the existing extractor output; no independent release inventory or downloader'
     report['generation'] = {'status': 'building', 'converted': 0, 'excluded': {},
+                            'failed_rkm_extractions': sorted(failed_rkms),
                             'coverage': 'partial; only validated basic scenes'}
     catalogue = {'schemaVersion': 1, 'models': {}}
     referenced = set()
@@ -112,6 +129,7 @@ def generate_models(native_objects, extracted_dir, dist_dir, report_path, *, cam
                 if public_identities is not None and identity not in public_identities:
                     continue
                 category = association['category']
+                source_complete = False
                 try:
                     if not association['references_resolved']:
                         raise SelectionError('unresolved_association', association.get('error', 'RK/ANIM/CSV validation failed'))
@@ -122,6 +140,13 @@ def generate_models(native_objects, extracted_dir, dist_dir, report_path, *, cam
                     if category == 'PonySet' and _render_override(campaign, selection_category, owner_id):
                         raise SelectionError('campaign_visual_override_unverified', 'Owner visual override requires review')
                     obj = native_objects[selection_category][owner_id]
+                    if failed_paths:
+                        models = [association['model']]
+                        child = report['identities'][owner_id].get('additional_actor', {})
+                        if child.get('model'):
+                            models.append(child['model'])
+                        for name in models:
+                            _check_failed_materials(folder, report['models'][name], failed_paths)
                     prepared_additional = prepare_additional_actor(obj, report['identities'][owner_id],
                         report, folder, additional_cache)
                     model_name = association['model']
@@ -190,6 +215,9 @@ def generate_models(native_objects, extracted_dir, dist_dir, report_path, *, cam
                         selection['provenance']['interactions'] = {'diagnostics': [
                             {'code': 'interaction-assets-unavailable', 'reason': str(error)}]}
                         bundle = convert_selected(selection, {})
+                    # Only source preparation/conversion errors are isolated.
+                    # Output integrity checks and writes below remain fatal.
+                    source_complete = True
                     model_row = bundle.catalogue['models'][identity]
                     bundle_files = dict(bundle.files)
                     additional_provenance = None
@@ -241,6 +269,11 @@ def generate_models(native_objects, extracted_dir, dist_dir, report_path, *, cam
                 except (SelectionError, NativeInputError, ConversionError) as error:
                     report['generation']['excluded'][identity] = {
                         'code': getattr(error, 'code', type(error).__name__), 'reason': str(error)}
+                except (ValueError, OSError) as error:
+                    if source_complete:
+                        raise
+                    report['generation']['excluded'][identity] = {
+                        'code': 'native_source_error', 'reason': f'{type(error).__name__}: {error}'}
             if not catalogue['models'] and eligible:
                 raise ValueError('No verified basic 3D scenes; previous catalogue was not replaced')
             # Report unreferenced files without deleting them. Only current

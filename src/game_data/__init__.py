@@ -66,6 +66,7 @@ def build_cdn(
     notifier = Notifier()
 
     success: bool = True
+    failed_rkms = set()
 
     aes_key: bytes | None = None
 
@@ -204,8 +205,7 @@ def build_cdn(
                 return False
         else:
             if failed_rkms and 'model_gen' not in skip:
-                console.print('[red]RKM extraction failed; stopping build before model generation[/]')
-                return False
+                console.print('[yellow]RKM extraction failed; affected 3D models will be excluded[/]')
 
         console.line()
 
@@ -252,6 +252,7 @@ def build_cdn(
             report = generate_models(
                 native_objects, extracted_dir, dist_dir, raw_dir/'model-associations.json',
                 campaign=campaign, public_identities=public_identities,
+                failed_rkms=failed_rkms,
             )
             console.print(report['summary'])
 

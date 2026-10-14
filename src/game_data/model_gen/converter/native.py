@@ -113,44 +113,6 @@ def _validate_model_layout(path: Path) -> None:
         raise NativeInputError("Unsupported RK position/UV layout")
 
 
-# Source fingerprints for the reviewed ordinary GPU skinning path. They are
-# format evidence, not a character allowlist. Other revisions need review.
-_ZERO_WEIGHT_SHADER_SOURCES = {
-    "rkshader.rkvs": "038e5df9a1fe9fccf7626cb681c6640cc0411b41fb12cea46b097c156e3d7284",
-    "rkshadercore.rkvs": "8c5d2c3b521bb5a5babd4e664c2a5df81a7446b370e4ff7d9dad26bd62bd9901",
-    "rkshader.rkps": "46252eb384742e94e2824584270d3e2c2952b4fc9d0c35144624d7b797922052",
-}
-
-
-# 11.4.3c shader sources plus the common skinning macro. The native GPU
-# binder supplies zero for an undeclared UserVector, even though the material's
-# CPU clock storage starts at one. The horn fragment shader discards at x < .001.
-_HORN_SHADER_SOURCES = {
-    "rkshader_horn.rkvs": "b53e792c1bc9bde2c935d5ebdb1489e80b373f39887a0c3bfd538fb30fbe4eee",
-    "rkshader_horn.rkps": "8222173b5b06f3d3925e7c91f87055a004b72617dad7da596520b1b02f34dd8d",
-    "rkshadercore.rkvs": "8c5d2c3b521bb5a5babd4e664c2a5df81a7446b370e4ff7d9dad26bd62bd9901",
-}
-
-
-def _horn_default_sources(folder, fields):
-    if any(name.startswith("UserVector") for name in fields):
-        raise NativeInputError("Explicit native horn UserVector requires its controller")
-    dependencies = []
-    for name, expected in _HORN_SHADER_SOURCES.items():
-        path = _sibling(folder, name)
-        if hashlib.sha256(path.read_bytes()).hexdigest() != expected:
-            raise NativeInputError(f"Unreviewed native horn shader source: {name}")
-        dependencies.append(path)
-    return dependencies
-
-
-_HAIR_SHADER_SOURCES = {
-    "rkponyhair0.rkvs": "950c260da3e44d07ca0c4947537fa5083e060c614e6be69da585b5bc72911221",
-    "rkponyhair0.rkps": "46252eb384742e94e2824584270d3e2c2952b4fc9d0c35144624d7b797922052",
-    **_ZERO_WEIGHT_SHADER_SOURCES,
-}
-
-
 def _rkm_fields(path):
     with path.open(newline="", encoding="utf-8-sig") as handle:
         rows = [row for row in csv.reader(handle, delimiter="=") if row]
@@ -183,27 +145,20 @@ def _hair_material(folder, fields, controller, first_material):
     speed, lower, upper = map(float, values)
     if speed < 0 or lower > upper:
         raise NativeInputError("Invalid native UserVector range or speed")
-    dependencies = []
-    for name, expected in _HAIR_SHADER_SOURCES.items():
-        path = _sibling(folder, name)
-        if hashlib.sha256(path.read_bytes()).hexdigest() != expected:
-            raise NativeInputError(f"Unreviewed native hair shader source: {name}")
-        dependencies.append(path)
     first_path = _material_sibling(folder, first_material)
     first_fields = _rkm_fields(first_path)
     # The native updater writes the clock into material zero as well. Ordinary
     # rkshader does not consume it; a horn/unknown first shader is not equivalent.
     if (first_fields.get("Shader") or "rkshader") not in {"rkshader", "rkponyhair0"}:
         raise NativeInputError("Unsupported first material for native UserVector clock")
-    dependencies.append(first_path)
     result = {"initial_gpu_x": _vector_x(fields, cpu=False)}
     if speed > 0:
         result["clock"] = {"version": 1, "initial": _vector_x(first_fields, cpu=True),
                            "speed": speed, "min": lower, "max": upper}
-    return result, dependencies, first_path.name
+    return result, [first_path], first_path.name
 
 
-def _remove_collapsed_zero_weight_triangles(primitives, materials, weights, folder):
+def _remove_collapsed_zero_weight_triangles(primitives, materials, weights):
     """Omit only triangles proven to collapse to one point in native rkshader.
 
     Its four explicit weights accumulate from zero; the final homogeneous lane
@@ -213,7 +168,7 @@ def _remove_collapsed_zero_weight_triangles(primitives, materials, weights, fold
     import numpy as np
     zero = np.all(weights == 0, axis=1)
     if not any(np.any(zero[p["indices"]]) for p in primitives):
-        return primitives, materials, None, []
+        return primitives, materials, None
     removed, retained = [], []
     for primitive_index, primitive in enumerate(primitives):
         flags = zero[primitive["indices"]]
@@ -230,22 +185,15 @@ def _remove_collapsed_zero_weight_triangles(primitives, materials, weights, fold
                             "primitive_removed": bool(collapsed.all())})
         if not collapsed.all():
             retained.append({**primitive, "indices": primitive["indices"][~collapsed]})
-    dependencies = []
-    for name, expected in _ZERO_WEIGHT_SHADER_SOURCES.items():
-        path = _sibling(folder, name)
-        if hashlib.sha256(path.read_bytes()).hexdigest() != expected:
-            raise NativeInputError(f"Unreviewed native zero-weight shader source: {name}")
-        dependencies.append(path)
     if not retained:
         raise NativeInputError("Native zero-weight triangles leave no renderable model geometry")
     used_materials = sorted({p["material"] for p in retained})
     remap = {old: new for new, old in enumerate(used_materials)}
     retained = [{**p, "material": remap[p["material"]]} for p in retained]
     evidence = {"rule": "reviewed-rkshader-gpu-all-zero-triangle-collapse-v1",
-                "shader_sources": dict(_ZERO_WEIGHT_SHADER_SOURCES),
                 "removed_triangle_count": sum(len(row["indices"]) for row in removed),
                 "removed": removed}
-    return retained, [materials[i] for i in used_materials], evidence, dependencies
+    return retained, [materials[i] for i in used_materials], evidence
 
 
 def _csv_clips(path: Path, frame_count: int, required: set[str], frame_boundary: str = 'reject') -> tuple[list[dict], int, list[dict]]:
@@ -497,7 +445,8 @@ def load_native(
                                             clock_source_material=first_material,
                                             user_vector=dict(user_vector))
             elif resolved_shader == "rkshader_horn":
-                dependencies.extend(_horn_default_sources(rkm_path.parent, raw_fields))
+                if any(name.startswith("UserVector") for name in raw_fields):
+                    raise NativeInputError("Explicit native horn UserVector requires its controller")
                 material_sources[-1]["shader_rule"] = "native-undeclared-user-vector-gpu-zero-discard"
             elif resolved_shader != "rkshader":
                 raise NativeInputError(f"Unsupported native shader: {resolved_shader}")
@@ -565,9 +514,8 @@ def load_native(
             primitive.update(native_mesh_index=native_mesh_index, default_visible=mesh.name in visible)
         primitives.append(primitive)
 
-    primitives, materials, zero_weight_evidence, shader_dependencies = _remove_collapsed_zero_weight_triangles(
-        primitives, materials, weights, rk_path.parent)
-    dependencies.extend(shader_dependencies)
+    primitives, materials, zero_weight_evidence = _remove_collapsed_zero_weight_triangles(
+        primitives, materials, weights)
 
     def transforms(start: int, end: int) -> dict:
         if end >= frames:

@@ -1,13 +1,11 @@
-"""Native UV clocks, using self-authored assets and mock reviewed digests."""
+"""Native material behavior from self-authored resources, without shader files."""
 from __future__ import annotations
 
-import hashlib
 import json
 import struct
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 from game_data.model_gen.converter import from_native, model_glb
 from game_data.model_gen.converter.native import load_native
@@ -23,17 +21,9 @@ class NativeHairTests(unittest.TestCase):
         add_triangles(self.folder, separate=True, weight=65535)
         path = self.folder / 'degenerate.rkm'
         path.write_text(path.read_text().replace('rkshader', 'rkponyhair0') + 'UserVector0_0=-0.528\n')
-        self.digests = {}
-        for name in ('rkponyhair0.rkvs', 'rkponyhair0.rkps', 'rkshadercore.rkvs', 'rkshader.rkvs', 'rkshader.rkps'):
-            data = ('self-authored fixture ' + name).encode()
-            (self.folder / name).write_bytes(data)
-            self.digests[name] = hashlib.sha256(data).hexdigest()
-        self.mock = patch('game_data.model_gen.converter.native._HAIR_SHADER_SOURCES', self.digests, create=True)
-        self.mock.start()
         self.controller = {'UserVectorSpeed': .15, 'RangeMin': -2, 'RangeMax': 2}
 
     def tearDown(self):
-        self.mock.stop()
         self.temp.cleanup()
 
     def load(self, visible=('body', 'degenerate'), **kwargs):
@@ -55,4 +45,3 @@ class NativeHairTests(unittest.TestCase):
         self.assertEqual(hair['pbrMetallicRoughness']['baseColorTexture']['extensions']['KHR_texture_transform']['offset'], [0, .528])
         self.assertEqual(hair['extras']['atpNativeUVClock'], {'version': 1, 'initial': 1, 'speed': .15, 'min': -2, 'max': 2})
         self.assertIn('KHR_texture_transform', document['extensionsUsed'])
-        self.assertTrue(set(self.digests).issubset({p['name'] for p in native['provenance']['files']}))

@@ -5,10 +5,11 @@ from pathlib import Path
 import struct
 import tempfile
 import unittest
+from unittest.mock import patch
 from xml.etree import ElementTree as ET
 
 from bootstrap import ROOT
-from native_fixture import write_fixture, write_native_tables
+from native_fixture import copy_rk_with_material, write_fixture, write_native_tables
 from game_data import model_gen
 from luna_kit.gameobjectdata import GameObjectData
 
@@ -168,27 +169,23 @@ class ModelGeneration(unittest.TestCase):
                 '</AnimationList>', encoding='utf-8')
 
 
-    def test_normal_generation_keeps_verified_world_until_exact_book_xml_is_restored(self):
+    def test_normal_generation_uses_empty_book_controller_then_reads_restored_xml(self):
         self.prepare_book_and_world_contexts()
         self.generate(display_profile='world-preview')
         world = self.assert_closed()
-        world_catalogue = (self.dist/'models_3d.json').read_bytes()
         references = world['models']['Synthetic_Flag']
-        world_bytes = {ref['path']: (self.dist/ref['path']).read_bytes()
-                       for ref in [references, *references['animations']]}
         book = self.native/'flag.xml'
         original = book.read_bytes()
         book.unlink()
         report = self.generate()
-        self.assertEqual(report['generation']['display_profiles'], {'world-preview': 1})
+        self.assertEqual(report['generation']['display_profiles'], {'ponybook-default': 1})
         self.assertEqual(report['generation']['excluded'], {})
         selection = report['identities']['Synthetic_Flag']['selection']
-        self.assertEqual(selection['display']['selected'], 'world-preview')
-        self.assertEqual(selection['display']['ponybook_unavailable']['code'], 'missing_event_source')
-        self.assertIn('flag.xml', selection['display']['ponybook_unavailable']['reason'])
-        self.assertNotIn('ponybook', selection)
-        self.assertEqual((self.dist/'models_3d.json').read_bytes(), world_catalogue)
-        self.assertEqual({name: (self.dist/name).read_bytes() for name in world_bytes}, world_bytes)
+        self.assertEqual(selection['ponybook']['event_source'], 'missing-input-native-empty-controller')
+        self.assertEqual(selection['ponybook']['event_file'], 'flag.xml')
+        missing_row = self.assert_closed()['models']['Synthetic_Flag']
+        self.assertEqual(missing_row['sha256'], references['sha256'])
+        self.assertEqual({a['id'] for a in missing_row['animations']}, {'wave', 'rest', 'bind', 'book_event'})
         # Restore the same source bytes without changing generation options or tables.
         book.write_bytes(original)
         restored = self.generate()
@@ -198,6 +195,7 @@ class ModelGeneration(unittest.TestCase):
         self.assertNotIn('ponybook_unavailable', selection['display'])
         self.assertEqual(selection['rest']['name'], 'rest')
         self.assertEqual(selection['ponybook']['constructor']['name'], 'bind')
+        self.assertEqual(selection['ponybook']['event_source'], 'xml')
         self.assertEqual(row['path'], references['path'])
         # Both verified contexts choose the same idle and visible geometry.
         self.assertEqual(row['sha256'], references['sha256'])
@@ -212,6 +210,89 @@ class ModelGeneration(unittest.TestCase):
         self.assertEqual(set(self.assert_closed()['models']), {'Synthetic_Flag'})
         self.assertEqual(report['generation']['excluded']['Synthetic_Missing']['code'], 'unresolved_association')
         self.assertEqual(report['generation']['coverage'], 'partial; only validated basic scenes')
+
+    def test_failed_material_excludes_only_its_model_even_if_stale_file_exists(self):
+        copy_rk_with_material(self.native/'flag.rk', self.native/'broken.rk', 'broken')
+        (self.native/'broken.rkm').write_bytes((self.native/'flag.rkm').read_bytes())
+        self.objects = write_native_tables(self.native, {
+            'Synthetic_Broken': {'model':'broken', 'animation':'flag', 'events':'flag'},
+            'Synthetic_Flag': {'model':'flag', 'animation':'flag', 'events':'flag'}})
+        try:
+            report = self.generate(failed_rkms={'broken.rkm', 'unrelated/flag.rkm'})
+        except Exception as error:
+            self.fail(f'An isolated material failure stopped generation: {error}')
+        self.assertEqual(set(self.assert_closed()['models']), {'Synthetic_Flag'})
+        self.assertEqual(report['generation']['excluded']['Synthetic_Broken']['code'], 'material_extraction_failed')
+        self.assertFalse((self.dist/'models/3d/Synthetic_Broken.glb').exists())
+
+    def test_failed_material_candidates_respect_exact_source_art_precedence(self):
+        copy_rk_with_material(self.native/'flag.rk', self.native/'art.rk', 'art.psd')
+        for name in ('art.psd.rkm', 'art.rkm'):
+            (self.native/name).write_bytes((self.native/'flag.rkm').read_bytes())
+        self.objects = write_native_tables(self.native, {
+            'Synthetic_Art': {'model':'art', 'animation':'flag', 'events':'flag'},
+            'Synthetic_Flag': {'model':'flag', 'animation':'flag', 'events':'flag'}})
+        try:
+            report = self.generate(failed_rkms={'art.rkm'})
+            self.assertEqual(set(self.assert_closed()['models']), {'Synthetic_Art', 'Synthetic_Flag'})
+            (self.native/'art.psd.rkm').unlink()
+            report = self.generate(failed_rkms={'art.psd.rkm'})
+        except Exception as error:
+            self.fail(f'An isolated source-art failure stopped generation: {error}')
+        self.assertEqual(set(self.assert_closed()['models']), {'Synthetic_Flag'})
+        self.assertEqual(report['generation']['excluded']['Synthetic_Art']['code'], 'material_extraction_failed')
+
+    def test_source_read_error_excludes_only_affected_identity(self):
+        (self.native/'broken.xml').write_bytes((self.native/'flag.xml').read_bytes())
+        self.objects = write_native_tables(self.native, {
+            'Synthetic_Broken': {'model':'flag', 'animation':'flag', 'events':'broken'},
+            'Synthetic_Flag': {'model':'flag', 'animation':'flag', 'events':'flag'}})
+        original = Path.read_bytes
+        def read(path):
+            if path == self.native/'broken.xml':
+                raise OSError('synthetic source read error')
+            return original(path)
+        try:
+            with patch.object(Path, 'read_bytes', read):
+                report = self.generate()
+        except Exception as error:
+            self.fail(f'An isolated source read error stopped generation: {error}')
+        self.assertEqual(set(self.assert_closed()['models']), {'Synthetic_Flag'})
+        self.assertIn('synthetic source read error', report['generation']['excluded']['Synthetic_Broken']['reason'])
+
+    def test_invalid_identity_override_excludes_only_affected_identity(self):
+        self.objects = write_native_tables(self.native, {
+            'Synthetic_Broken': {'model':'flag', 'animation':'flag', 'events':'flag'},
+            'Synthetic_Flag': {'model':'flag', 'animation':'flag', 'events':'flag'}})
+        try:
+            report = self.generate(campaign={'game_object_data': {'Pony': {'Synthetic_Broken': []}}})
+        except Exception as error:
+            self.fail(f'An isolated source override stopped generation: {error}')
+        self.assertEqual(set(self.assert_closed()['models']), {'Synthetic_Flag'})
+        self.assertIn('Synthetic_Broken', report['generation']['excluded'])
+
+    def test_staging_write_failure_remains_fatal_and_preserves_catalogue(self):
+        previous = self.seed_generation()
+        original = Path.write_bytes
+        def write(path, data):
+            if any(part.startswith('.models-3d-') for part in path.parts):
+                raise OSError('synthetic staging failure')
+            return original(path, data)
+        with patch.object(Path, 'write_bytes', write), self.assertRaisesRegex(OSError, 'synthetic staging failure'):
+            self.generate()
+        self.assertEqual((self.dist/'models_3d.json').read_bytes(), previous)
+        self.assertTrue(json.loads(self.report.read_text())['generation']['status'].startswith('failed'))
+
+    def test_converter_digest_failure_remains_fatal(self):
+        previous = self.seed_generation()
+        original = model_gen.convert_native
+        def convert(*args, **kwargs):
+            bundle = original(*args, **kwargs)
+            bundle.files['models/3d/Synthetic_Flag.glb'] += b'invalid'
+            return bundle
+        with patch.object(model_gen, 'convert_native', convert), self.assertRaisesRegex(ValueError, 'invalid asset key or digest'):
+            self.generate()
+        self.assertEqual((self.dist/'models_3d.json').read_bytes(), previous)
 
 
     def test_all_fail_preserves_previous_catalogue(self):

@@ -9,6 +9,16 @@ from PIL import Image
 from luna_kit.gameobjectdata import GameObjectData
 
 
+def copy_rk_with_material(source, destination, material):
+    """Change only the fixture's one RK material name, retaining its mesh/rig."""
+    data = bytearray(Path(source).read_bytes())
+    headers = [struct.unpack_from('<4I', data, 80 + index * 16) for index in range(24)]
+    _, offset, count, size = next(row for row in headers if row[0] == 2)
+    assert count == 1 and len(material.encode('ascii')) < size
+    data[offset:offset + size] = material.encode('ascii').ljust(size, b'\0')
+    Path(destination).write_bytes(data)
+
+
 def write_fixture(folder: Path) -> None:
     folder.mkdir(parents=True, exist_ok=True)
 

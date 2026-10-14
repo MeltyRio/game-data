@@ -16,7 +16,7 @@ from bootstrap import ROOT
 from game_data import extractor, model_gen
 from luna_kit.ark import ARK
 from rich.console import Console
-from native_fixture import write_fixture, write_native_tables
+from native_fixture import copy_rk_with_material, write_fixture, write_native_tables
 from test_extractor import write_ark
 
 
@@ -59,7 +59,7 @@ class Pipeline(unittest.TestCase):
         self.assertTrue(self.run_build(['download','extract']))
         self.writer.assert_called_once_with(self.objects,self.root/'raw/extracted',self.root/'dist',
             self.root/'raw/model-associations.json',campaign=self.transformer.defaultGameCampaign,
-            public_identities={'pony_id','pet_id','costume_id'})
+            public_identities={'pony_id','pet_id','costume_id'}, failed_rkms=set())
         self.globals['GameObjectData'].assert_not_called()
         self.transformer.start.assert_called_once()
         self.transformer.save.assert_called_once()
@@ -86,10 +86,16 @@ class Pipeline(unittest.TestCase):
                 self.assertEqual(self.game_data, before)
 
 
-    def prepare_extraction(self, *, rkm=True, extra_files=None):
+    def prepare_extraction(self, *, rkm=True, extra_files=None, mixed=False):
         source = self.root/'archive-input'
         write_fixture(source)
         self.transformer.gameObjectData = write_native_tables(source)
+        if mixed:
+            copy_rk_with_material(source/'flag.rk', source/'safe.rk', 'safe')
+            (source/'safe.rkm').write_bytes((source/'flag.rkm').read_bytes())
+            self.transformer.gameObjectData = write_native_tables(source, {
+                'Synthetic_Flag': {'model':'flag', 'animation':'flag', 'events':'flag'},
+                'Synthetic_Good': {'model':'safe', 'animation':'flag', 'events':'flag'}})
         if not rkm:
             (source/'flag.rkm').unlink()
         # Same-name PVR is required by the native absent-RKM rule.
@@ -100,6 +106,8 @@ class Pipeline(unittest.TestCase):
         files.update(extra_files or {})
         write_ark(self.root/'raw/arks', files)
         self.game_data.game_objects.pony.objects = {'Synthetic_Flag': SimpleNamespace(tags=[])}
+        if mixed:
+            self.game_data.game_objects.pony.objects['Synthetic_Good'] = SimpleNamespace(tags=[])
         self.game_data.game_objects.pet.objects = {}
         self.game_data.game_objects.costume.objects = {}
         self.globals['extract'] = extractor.extract
@@ -118,42 +126,53 @@ class Pipeline(unittest.TestCase):
         self.assertFalse((self.root/'raw/extracted/flag.rkm').exists())
         self.globals['generate_images'].assert_called_once()
 
-    def test_rkm_failure_stops_before_generation_upload_and_dlc_update(self):
-        # The second case verifies failures are not lost if extraction later
-        # raises outside the per-file handler (for example during atlas work).
-        for atlas_error in (False, True):
-            with self.subTest(atlas_error=atlas_error):
-                self.prepare_extraction(extra_files={'atlas/broken.texatlas': b'synthetic'}
-                                        if atlas_error else {})
-                client = Mock()
-                client.get_object.side_effect = OSError('no previous synthetic version')
-                self.globals['os'].environ = {'S3_BUCKET': 'synthetic-local-only'}
-                self.globals['get_s3_client'] = Mock(return_value=client)
-                self.globals['API'] = Mock(side_effect=AssertionError('DLC request forbidden'))
-                original = ARK.extract
+    def test_rkm_failure_continues_unaffected_generation_without_defaulting_failed_material(self):
+        self.prepare_extraction(mixed=True)
+        original = ARK.extract
+        def inject(ark, filename, *args, **kwargs):
+            if filename == 'flag.rkm':
+                raise OSError('synthetic RKM extraction failure')
+            return original(ark, filename, *args, **kwargs)
+        with patch.object(ARK, 'extract', inject), patch.object(extractor, 'console', Console(quiet=True)):
+            self.assertTrue(self.run_build(['download']))
+        catalogue = json.loads((self.root/'dist/models_3d.json').read_text())
+        report = json.loads((self.root/'raw/model-associations.json').read_text())
+        self.assertEqual(set(catalogue['models']), {'Synthetic_Good'})
+        self.assertEqual(report['generation']['excluded']['Synthetic_Flag']['code'], 'material_extraction_failed')
+        self.assertEqual(report['generation']['failed_rkm_extractions'], ['flag.rkm'])
+        self.assertFalse((self.root/'dist/models/3d/Synthetic_Flag.glb').exists())
+        self.assertEqual(report['identities']['Synthetic_Good']['conversion_provenance']['material_sources'][0]['status'],
+                         'parsed-source-rkm')
 
-                def inject(ark, filename, *args, **kwargs):
-                    if filename == 'flag.rkm':
-                        raise OSError('synthetic RKM extraction failure')
-                    return original(ark, filename, *args, **kwargs)
+    def test_extraction_level_failure_stops_before_generation_upload_and_dlc_update(self):
+        # A failure outside the per-file handler has unknown dependency scope.
+        self.prepare_extraction(extra_files={'atlas/broken.texatlas': b'synthetic'})
+        client = Mock()
+        client.get_object.side_effect = OSError('no previous synthetic version')
+        self.globals['os'].environ = {'S3_BUCKET': 'synthetic-local-only'}
+        self.globals['get_s3_client'] = Mock(return_value=client)
+        self.globals['API'] = Mock(side_effect=AssertionError('DLC request forbidden'))
+        original = ARK.extract
 
-                with patch.object(ARK, 'extract', inject), patch.object(extractor, 'console', Console(quiet=True)), \
-                     patch.object(extractor, 'TexAtlas', side_effect=OSError('synthetic atlas failure')) as atlas:
-                    self.assertFalse(self.globals['build_cdn'](
-                        self.root/'raw', self.root/'dist', '11.4.3c', True,
-                        self.root/'overrides', skip=['download']))
-                if atlas_error:
-                    atlas.assert_called_once_with(self.root/'raw/extracted/atlas/broken.texatlas')
-                else:
-                    atlas.assert_not_called()
-                self.globals['Transformer'].assert_not_called()
-                self.writer.assert_not_called()
-                self.globals['generate_images'].assert_not_called()
-                self.globals['sync'].assert_not_called()
-                client.copy_object.assert_not_called()
-                client.put_object.assert_not_called()
-                self.globals['API'].assert_not_called()
-                self.assertFalse((self.root/'dist/models_3d.json').exists())
+        def inject(ark, filename, *args, **kwargs):
+            if filename == 'flag.rkm':
+                raise OSError('synthetic RKM extraction failure')
+            return original(ark, filename, *args, **kwargs)
+
+        with patch.object(ARK, 'extract', inject), patch.object(extractor, 'console', Console(quiet=True)), \
+             patch.object(extractor, 'TexAtlas', side_effect=OSError('synthetic atlas failure')) as atlas:
+            self.assertFalse(self.globals['build_cdn'](
+                self.root/'raw', self.root/'dist', '11.4.3c', True,
+                self.root/'overrides', skip=['download']))
+        atlas.assert_called_once_with(self.root/'raw/extracted/atlas/broken.texatlas')
+        self.globals['Transformer'].assert_not_called()
+        self.writer.assert_not_called()
+        self.globals['generate_images'].assert_not_called()
+        self.globals['sync'].assert_not_called()
+        client.copy_object.assert_not_called()
+        client.put_object.assert_not_called()
+        self.globals['API'].assert_not_called()
+        self.assertFalse((self.root/'dist/models_3d.json').exists())
 
     def test_non_rkm_failure_keeps_existing_tolerance(self):
         self.prepare_extraction(extra_files={'unrelated.txt': b'synthetic'})

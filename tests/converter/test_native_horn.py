@@ -1,13 +1,11 @@
-"""Self-authored shader fixtures: only reviewed hash constants are mocked."""
+"""Native material behavior from self-authored resources, without shader files."""
 from __future__ import annotations
 
-import hashlib
 import json
 import struct
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 import numpy as np
 
@@ -21,18 +19,10 @@ class NativeHornTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.folder = Path(self.temp.name)
         fixture(self.folder)
-        self.digests = {}
-        for name in ('rkshader_horn.rkvs', 'rkshader_horn.rkps', 'rkshadercore.rkvs'):
-            payload = ('self-authored fixture: ' + name).encode()
-            (self.folder / name).write_bytes(payload)
-            self.digests[name] = hashlib.sha256(payload).hexdigest()
-        self.mock = patch('game_data.model_gen.converter.native._HORN_SHADER_SOURCES', self.digests, create=True)
-        self.mock.start()
         rkm = self.folder / 'body.rkm'
         rkm.write_text(rkm.read_text().replace('Shader=rkshader', 'Shader=rkshader_horn').replace('BlendMode=none', 'BlendMode=alpha'))
 
     def tearDown(self):
-        self.mock.stop()
         self.temp.cleanup()
 
     def load(self, visible=('body',)):
@@ -59,4 +49,3 @@ class NativeHornTests(unittest.TestCase):
         self.assertEqual(len(document['images']), 1)
         self.assertEqual(material['extras']['atpNativeDepth'], {'write': True, 'test': True})
         self.assertEqual(native['materials'][0]['native_horn_default_discard'], True)
-        self.assertTrue(set(self.digests).issubset({p['name'] for p in native['provenance']['files']}))

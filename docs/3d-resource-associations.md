@@ -17,23 +17,29 @@ private release-integrity records are kept outside this repository; none of thos
 
 The extractor keeps logging per-file errors and continuing with Luna's
 `ARK.extract()`. It returns only RKM paths that raised during that invocation.
-With model generation enabled, any such failure stops the build before
-Transformer, model/image generation, upload and the final DLC status update;
-an overall extraction exception also stops that build. A later same-name
-extraction does not clear an earlier failure. Non-RKM per-file errors and builds
-using `--skip model_gen` retain their existing handling. A natively absent RKM
-does not produce an extraction error, so the verified default material remains
-supported. This does not check that every required archive was downloaded.
+With model generation enabled, those paths become private generation diagnostics.
+Each identity whose RK materials or declared additional actor depend on a failed
+RKM is excluded while unaffected identities continue. Exact material names keep
+precedence over the reviewed source-art suffix alternative; a failed candidate
+cannot fall back to a different RKM or the native absent-RKM default. The check
+conservatively includes hidden materials and the hair clock's first material.
+An overall extraction exception still stops the build before model generation,
+upload and the final DLC status update because its affected inputs are unknown.
+A later same-name extraction does not clear an earlier failure. Non-RKM per-file
+errors and builds using `--skip model_gen` retain their existing handling.
+A natively absent RKM does not produce an extraction error, so the verified
+default material remains supported. This does not check that every required
+archive was downloaded.
 
 `--skip extract` continues to use the existing files without this run's extraction
 result. The caller is responsible for providing a complete, successfully
 extracted input set for the selected game version; skipping is not an automatic
 integrity check. No confirmation flag or persistent source index is added.
 
-Normal generation uses `ponybook-preferred`: a strictly verified PonyBook default
-is selected when its native visibility agrees with the independently validated
-World preview. Otherwise that World result is retained with the precise Book
-failure in private diagnostics. Pets retain their existing editor-eye policy.
+Normal generation uses `ponybook-preferred`: select the supported native Book
+appearance, retaining the independently validated World preview if Book selection
+fails. Missing Book XML uses the empty-controller rule below; other failures
+remain in private diagnostics. Pets retain their existing editor-eye policy.
 This does not implement the complete PonyBook UI or idle autoplay. The optional
 native interaction profile below supplies blink, click and dizzy data to ATP.
 
@@ -144,11 +150,19 @@ LOD-number parsing or cross-character replacement is applied.
 
 The strict PonyBook profile uses the native first Item and first literal LOD
 replacement directly. It applies Eyes, MeshList, then the same default/explicit
-wardrobe policy, in native constructor order. It selects this profile only when
-the resulting visible meshes equal the already verified World selection. A
-missing required Open mesh or a visibility disagreement retains the World
-preview under `ponybook-preferred`, with a diagnostic; it is not labelled a
-verified Book appearance.
+wardrobe policy, in native constructor order. When Book XML is present, the
+resulting visible meshes must equal the already verified World selection. A
+missing required Open mesh or an XML-controlled visibility disagreement retains
+the World preview under `ponybook-preferred`, with a diagnostic.
+
+If the exact Book XML is absent from the supplied inputs, use the reviewed native
+empty controller: no XML mesh defaults or events, while Eyes, wardrobe and idle
+selection still apply. World mesh defaults are not substituted. Private provenance
+records `missing-input-native-empty-controller` and the requested filename.
+This describes the supplied input set, not every resource mounted by the game;
+it cannot distinguish an unprovided XML from an earlier download/extraction failure.
+Existing error logging and continuation remain unchanged. A present malformed,
+unreadable or ambiguous XML is not treated as absent.
 
 MeshList `DefaultVisible` is applied to exact native subobjects. Missing default-
 hidden subobjects are recorded; missing default-visible subobjects remain
@@ -187,9 +201,10 @@ Base Book selection retains World-validated, explicitly declared town actions,
 excluding event-bearing actions until the interaction compiler below verifies
 all their events. Constructor pose and later Book idle retain their existing
 strict checks against both contexts. The converter independently
-validates and hashes both sources before producing a bundle, including when the
-World branch has a positively absent controller. Missing extracted XML never
-means that events are absent. Unknown events remain unsupported.
+validates and hashes all present sources before producing a bundle, including
+when the World branch has a positively absent controller. Required World XML
+remains mandatory even when Book uses an empty controller. Unknown events remain
+unsupported.
 
 `ponybook-default` exposes strict selection; `ponybook-preferred` first requires
 a valid World result, then records a concrete Book failure and retains that old
@@ -259,17 +274,15 @@ indices privately, and preserves the rig and every retained weight. It does not
 assign root weights or add helper joints. A mixed zero/nonzero triangle, a model
 with no remaining triangles, or an unreviewed shader is still refused.
 
-This exception requires the exact reviewed vertex/core/fragment shader digests;
-those files are obtained by the existing normal extractor and included in source
-provenance. Changed or missing shaders fail closed only for affected inputs.
-Ordinary models do not gain these dependencies. The proof covers the reviewed
-GPU path, not an unverified CPU-skinning implementation. This zero-weight rule
-remains specific to ordinary `rkshader`; it is not extended to special shaders.
+This rule uses the supported `rkshader` material profile without requiring shader
+source files. The proof covers the reviewed GPU path, not an unverified
+CPU-skinning implementation, and does not extend to special shaders.
 
 ### Bounded special materials
 
-Two additional source-verified shader behaviors are supported, with exact reviewed
-shader digests included in private dependencies. Other revisions fail closed.
+Two additional source-verified behaviors are selected by RKM shader name.
+Shader source files are not conversion inputs; arbitrary shaders and future
+semantic changes are not automatically supported.
 For `rkshader_horn`, an undeclared native UserVector binds GPU zero and its fragment
 shader discards every fragment. The converter preserves the geometry but emits
 standard glTF MASK with zero base alpha, which also prevents depth writes. An
@@ -382,8 +395,10 @@ conversion evidence also remain distinct rather than overwriting history.
 
 One bad supported input is excluded with its reason; it cannot create a success
 row or partial bundle. If all requested identities fail, the local generation
-stage preserves a previous catalogue. Unexpected programming/I/O failures
-abort the stage. All bundles are validated before local publication. Publication
+stage preserves a previous catalogue. Source validation and read errors before
+output validation exclude the affected identity. Unexpected programming errors,
+asset integrity conflicts, staging writes and publication errors abort the stage.
+All bundles are validated before local publication. Publication
 writes GLBs before replacing the catalogue, allowing fixed Object ID files to
 be overwritten. Individual file replacement is atomic; the complete directory
 is not. A later write failure can leave an old catalogue with replaced models.
@@ -458,7 +473,7 @@ files with current tables. The important input categories are:
 | Referenced `.rk` models | Geometry, skeleton and named visible parts. |
 | Declared library `.anim` and matching `.csv` | Animation frames and native clip names/ranges. These are resolved from native declarations, not paired by guessing. |
 | Native `.rkm`, `.pvr`, `.alpha.pvr` and `.png` dependencies | Materials and textures. Retain RKM files that exist in the release; only a genuinely absent native RKM may use the verified default. |
-| Referenced controller `.xml` and required `.rkvs`/`.rkps` shader sources | Appearance/event checks and supported special material behavior. |
+| Referenced controller `.xml` | Appearance and animation event checks. |
 
 For example, the verified 11.4.3c Twilight declaration resolves to
 `pony_twilight_set_lod1.rk` and the `pony_type01.anim` / `pony_type01.csv` library,

@@ -29,7 +29,7 @@ def _strings(value, field):
     return [v for v in value if v]
 
 
-def _event_file(folder, stem):
+def _event_file(folder, stem, *, allow_missing=False):
     if (not isinstance(stem, str) or not stem or stem in {'.', '..'}
             or any(c in stem for c in '/\\\0') or any(ord(c) < 32 for c in stem)):
         _fail('invalid_event_source', 'Unsafe or missing event resource stem')
@@ -38,11 +38,14 @@ def _event_file(folder, stem):
         _fail('unsupported_event_stem', 'Expected native event stem without .xml')
     name = stem + '.xml'
     path = folder / name
+    matches = [p.name for p in folder.iterdir() if p.name.casefold() == name.casefold()]
+    if allow_missing and not matches:
+        return None
     if not path.is_file():
         _fail('missing_event_source', 'Missing extracted event XML: ' + name)
     if path.resolve().parent != folder.resolve():
         _fail('invalid_event_source', 'Event file leaves the extracted directory')
-    if [p.name for p in folder.iterdir() if p.name.casefold() == name.casefold()] != [name]:
+    if matches != [name]:
         _fail('ambiguous_event_source', 'Event filename is not unique and exact: ' + name)
     return path
 
@@ -364,11 +367,11 @@ def _ponybook_view(world, *, obj, game_objects, model_stem, mesh_names, clips,
     No player equipment or alternate owner is inferred. Display the first frame
     of the resolved native Conversation idle, without autoplay. Keep the loader
     constructor clip available and validate both event contexts independently.
-    Missing dependencies remain errors.
+    Missing Book XML uses the native empty controller for the supplied inputs.
     """
     animation = obj.get('Animation') or {}
-    path = _event_file(Path(extracted_dir), animation.get('Rig_MediumLOD'))
-    defaults, eventful, digest, absent_hidden = _events(path, model_stem, set(mesh_names))
+    path = _event_file(Path(extracted_dir), animation.get('Rig_MediumLOD'), allow_missing=True)
+    defaults, eventful, digest, absent_hidden = ({}, set(), None, []) if path is None else _events(path, model_stem, set(mesh_names))
     # Reuse Luna's ordered fields; native config consumes Item zero, then
     # changes only the first literal lod0 to lod1. A later Item is not a fallback.
     data = obj.get('Eyes')
@@ -397,10 +400,9 @@ def _ponybook_view(world, *, obj, game_objects, model_stem, mesh_names, clips,
         for mesh, shown in wardrobe['mesh_visibility'].items():
             if shown and mesh in mesh_names: visible.add(mesh)
             elif not shown: visible.discard(mesh)
-    # Native config misses can leave extra expression layers visible. Keep a
-    # previously verified world preview until the complete alternate/owned
-    # display context is known, rather than silently changing its appearance.
-    if visible != set(world['visible_meshes']):
+    # Keep the existing guard for XML-controlled visibility differences.
+    # An empty Book controller applies only its independent Eyes/wardrobe rules.
+    if path is not None and visible != set(world['visible_meshes']):
         _fail('ponybook_visibility_unverified', 'PonyBook and verified world default visibility differ')
     conversation = obj.get('Conversation')
     requested = 'gen_idle_00' if conversation is None else conversation.get('IdleAnimation')
@@ -439,7 +441,7 @@ def _ponybook_view(world, *, obj, game_objects, model_stem, mesh_names, clips,
     if idle not in selected: selected.append(idle)
     # Validate/hash both sources in the converter too. A missing world event
     # controller does not imply that a present PonyBook XML can be ignored.
-    extra = [] if world['event_path'] == path else [path]
+    extra = [] if path is None or world['event_path'] == path else [path]
     fields = {name: list(values) for name, values in world['provenance']['clip_fields'].items()}
     fields.setdefault(constructor, []).append('native ConversationPony constructor: default / original CSV row zero')
     fields.setdefault(idle, []).append('PonyBook.Conversation.IdleAnimation')
@@ -447,11 +449,12 @@ def _ponybook_view(world, *, obj, game_objects, model_stem, mesh_names, clips,
     provenance = {**world['provenance'], 'clip_fields': fields,
         'display': {'requested': 'ponybook-default', 'selected': 'ponybook-default',
                     'context': 'public default appearance; no player state or native UI controller'},
-        'ponybook': {'event_file': path.name, 'event_sha256': digest,
+        'ponybook': {'event_file': animation['Rig_MediumLOD'] + '.xml', 'event_sha256': digest,
+                     'event_source': 'xml' if path is not None else 'missing-input-native-empty-controller',
                      'mesh_defaults': defaults, 'absent_default_hidden_meshes': absent_hidden,
                      'eyes': names, 'eye_controller_enabled': bool(names['Open']),
                      'visibility_order': ['Eyes', 'MeshList', 'wardrobe'],
-                     'world_visibility_equivalent': True,
+                     'world_visibility_equivalent': visible == set(world['visible_meshes']),
                      'constructor': {'requested_name': 'default', 'name': constructor,
                                      'rule': constructor_rule,
                                      'field': 'native ConversationPony RK drawable constructor'},
@@ -460,7 +463,8 @@ def _ponybook_view(world, *, obj, game_objects, model_stem, mesh_names, clips,
         'rest': {'field': idle_field, 'requested_name': requested, 'name': idle, 'rule': idle_rule,
                  'context': 'PonyBook display idle first frame; no autoplay'},
         'clip_scope': 'verified object-declared town/Conversation actions plus native constructor pose/PonyBook idle; both event contexts checked'}
-    return {**world, 'rest_name': idle, 'clip_names': selected, 'additional_event_paths': extra,
+    return {**world, 'visible_meshes': list(dict.fromkeys(n for n in mesh_names if n in visible)), 'rest_name': idle,
+            'clip_names': selected, 'additional_event_paths': extra,
             'provenance': provenance, 'excluded_clips': excluded}
 
 
