@@ -152,11 +152,36 @@ pixel conversion unchanged.
   because glTF does not standardize them. The two reviewed special shader
   branches below preserve their native default behavior; unknown shaders fail.
 - Independent animation GLBs contain no geometry or images. STEP tracks target
-  stable indexed joint names. A repeated final key preserves each native frame's
-  full `1 / fps` duration.
+  stable indexed joint names as a standard glTF fallback. A repeated final key
+  preserves the held final frame and `frameCount / fps` duration.
 - Both GLBs carry an `atpRig` record. Its key includes the native ANIM content
   digest and indexed parent hierarchy. Consumers compare that key before binding
   tracks. This check does not establish the native association by itself.
+
+### Native frame interpolation
+
+Native conversions additionally emit
+`extras.atpClip.nativeSampling = {version: 1, translations, rotations}`. The
+last two fields are FLOAT accessor indices: VEC3 model-space positions and VEC4
+decoded XYZW quaternions, respectively. Both contain `frameCount * jointCount`
+entries in frame-major, joint-major order. These are native coordinates, before
+the existing GLB root's Rx(pi) rotation.
+
+Version 1 interpolates adjacent model-space positions linearly and quaternions
+with shortest-path NLERP: negate the second endpoint only when their dot product
+is negative, mix the decoded components, then normalize. **Do not normalize the
+endpoints before mixing:** compressed native quaternions retain small length
+differences. Convert the resulting model-space transforms to parent-local TRS
+after interpolation. Parent-local glTF LINEAR/SLERP is not equivalent. This
+profile follows the reviewed Android 11.4.3c sampler; it does not claim native
+multi-layer blending or controller/queue semantics.
+
+The last sample remains held until the existing clip duration; there is no wrap
+to the first frame or another CSV clip. The converter verifies that raw samples
+reproduce the exported keyframe poses. Model rigs, associations and resource
+paths are unchanged. Matrix-only `Clip` callers omit this optional metadata and
+retain STEP. Consumers may use STEP when metadata is absent, but must reject an
+unknown version or malformed native samples rather than silently ignoring them.
 
 ## All-zero skin triangles
 

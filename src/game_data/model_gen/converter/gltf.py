@@ -1,10 +1,10 @@
-"""glTF 2.0 GLB serializer: static skinned model, or separate STEP animations."""
+"""Static GLBs and independent animations with optional native sampling data."""
 import io
 import json
 import struct
 import numpy as np
 from PIL import Image
-from .core import Model, Clip, require, local_trs
+from .core import Model, Clip, require, local_trs, pose_matrices
 
 
 class GLB:
@@ -187,4 +187,21 @@ def animation_glb(clip: Clip) -> bytes:
             animation['channels'].append({'sampler': sampler, 'target': {'node': bone+1, 'path': path}})
     g.document['animations'] = [animation]
     g.document['extras']['atpClip'] = {'frameCount': count, 'fps': clip.fps, 'duration': count/clip.fps}
+    # Standard STEP channels remain usable by ordinary/older glTF consumers.
+    # Native-aware players interpolate these raw model-space samples first,
+    # then derive parent-local TRS. Never normalize endpoint quaternions here.
+    if clip.native_translations is not None or clip.native_rotations_xyzw is not None:
+        native_t = np.asarray(clip.native_translations)
+        native_q = np.asarray(clip.native_rotations_xyzw)
+        shape = (count, len(clip.rig.parents))
+        require(native_t.dtype.kind in 'fiu' and native_q.dtype.kind in 'fiu'
+                and native_t.shape == (*shape, 3) and native_q.shape == (*shape, 4),
+                'Invalid native sampling layout')
+        require(np.allclose(pose_matrices(native_t, native_q), frames_input, rtol=0, atol=2e-5),
+                'Native sampling poses differ from animation frames')
+        g.document['extras']['atpClip']['nativeSampling'] = {
+            'version': 1,
+            'translations': g.accessor(native_t.reshape(-1, 3), 'VEC3'),
+            'rotations': g.accessor(native_q.reshape(-1, 4), 'VEC4'),
+        }
     return g.finish()

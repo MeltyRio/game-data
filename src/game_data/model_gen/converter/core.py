@@ -47,6 +47,10 @@ class Clip:
     rig: Rig
     global_frames: np.ndarray
     fps: float
+    # Preserve decoded model-space quaternion lengths: native NLERP normalizes
+    # after mixing, so matrices alone cannot recover its fractional poses.
+    native_translations: np.ndarray | None = None
+    native_rotations_xyzw: np.ndarray | None = None
 
 
 def rig_from_native(native):
@@ -111,7 +115,8 @@ def clip_from_native(row, rig):
     """Convert the declared global native poses to the model's exact rig."""
     frames = pose_matrices(row['translations'], row['rotations_xyzw'])
     require(frames.shape[-3] == len(rig.parents), 'Native clip/bone count mismatch')
-    return Clip(row['name'], rig, frames, row['fps'])
+    return Clip(row['name'], rig, frames, row['fps'],
+                np.asarray(row['translations']), np.asarray(row['rotations_xyzw']))
 
 
 def from_native(native, *, identity, scale=1.0):
