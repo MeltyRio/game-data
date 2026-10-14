@@ -411,8 +411,9 @@ uv run --no-sync python -m unittest discover -s tests -v
 ```
 
 These tests use self-authored native-format inputs and do not require game
-resources or cloud credentials. They check conversion and pipeline behavior;
-they do not demonstrate the appearance of real characters.
+resources or cloud credentials. They cover key conversion, native association,
+PonyBook interaction, extraction-failure and upload-order regressions; they do
+not demonstrate the appearance of real characters.
 
 Offline tests bootstrap only the source package namespace to avoid CLI/cloud
 initialization; they do not replace production dependencies. The pipeline wiring

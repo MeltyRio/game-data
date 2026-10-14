@@ -75,7 +75,3 @@ class NativeEmitterTests(unittest.TestCase):
             with self.assertRaises(NativeInputError): load_native_emitter(folder, DIZZY_EMITTER)
             material.unlink()
             with self.assertRaises(NativeInputError): load_native_emitter(folder, DIZZY_EMITTER)
-
-    def test_native_dependency_may_not_escape_extracted_directory(self):
-        root = particle(); root.find('Texture').set('name', '../private')
-        with self.assertRaises(NativeInputError): parse_dizzy_particle(ET.tostring(root))

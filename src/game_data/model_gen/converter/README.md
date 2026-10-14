@@ -265,8 +265,8 @@ python -m unittest discover -s tests/converter -t tests -v
 The tests expose the `game_data` package namespace without its CLI initializer to avoid
 initializing unrelated CLI/cloud dependencies. `tests/native_fixture.py` creates
 a self-authored checkerboard flag with two joints. It contains no game artwork
-or native game bytes. Tests cover binary layout checks, bind and skinning math,
-embedded GLBs, independent clips, digest paths and conversion without writes.
+or native game bytes. Key regressions cover bind and skinning math, embedded
+GLBs, independent STEP clips, native sampling, resource paths and native material defaults.
 
 Props, companion orchestration, event execution, clothing assembly and task
 scenes remain outside this core. Special shaders are limited to the reviewed

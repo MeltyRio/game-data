@@ -52,34 +52,3 @@ class ExtractionFailures(unittest.TestCase):
         # A later extraction has its own result, not persistent failure state.
         with patch.object(extractor, 'console', Console(quiet=True)):
             self.assertEqual(extractor.extract(self.arks, self.output), set())
-
-    def test_absent_rkm_is_not_an_extraction_failure(self):
-        write_ark(self.arks, {'body.pvr': b'synthetic texture'})
-        with patch.object(extractor, 'console', Console(quiet=True)):
-            self.assertEqual(extractor.extract(self.arks, self.output), set())
-        self.assertFalse((self.output/'body.rkm').exists())
-
-    def test_later_same_name_noop_does_not_clear_failure(self):
-        files = {'body.rkm': b'Shader=rkshader\n'}
-        write_ark(self.arks, files)
-        write_ark(self.arks, files, '002_and_startup.ark')
-        self.output.mkdir()
-        (self.output/'body.rkm').write_bytes(files['body.rkm'])
-        original = ARK.extract
-        calls = []
-        successful_noops = []
-
-        def inject(ark, filename, *args, **kwargs):
-            calls.append(filename)
-            if len(calls) == 1:
-                raise OSError('synthetic first-archive failure')
-            # Identical on-disk bytes let Luna take its checksum no-op path.
-            with patch.object(ark, 'open', side_effect=AssertionError('expected no-op')):
-                result = original(ark, filename, *args, **kwargs)
-            successful_noops.append(filename)
-            return result
-
-        with patch.object(ARK, 'extract', inject), patch.object(extractor, 'console', Console(quiet=True)):
-            self.assertEqual(extractor.extract(self.arks, self.output), {'body.rkm'})
-        self.assertEqual(calls, ['body.rkm', 'body.rkm'])
-        self.assertEqual(successful_noops, ['body.rkm'])

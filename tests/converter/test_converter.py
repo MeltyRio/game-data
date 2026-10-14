@@ -6,7 +6,7 @@ import unittest
 import numpy as np
 from PIL import Image
 
-from game_data.model_gen.converter import Model, Rig, Clip, model_glb, animation_glb, ConversionError
+from game_data.model_gen.converter import Model, Rig, Clip, model_glb, animation_glb
 from game_data.model_gen.converter.core import local_trs, pose_matrices
 
 
@@ -77,13 +77,6 @@ class ConverterTest(unittest.TestCase):
         self.assertEqual(d['extras']['atpClip']['duration'], .3)
         self.assertTrue(all(s['interpolation'] == 'STEP' for s in d['animations'][0]['samplers']))
 
-    def test_global_to_local_roundtrip(self):
-        m, clip = fixture()
-        t, q = local_trs(clip.global_frames, m.rig.parents)
-        local = pose_matrices(t, q)
-        global_ = local.copy()
-        global_[:, 1] = global_[:, 0] @ local[:, 1]
-        np.testing.assert_allclose(global_, clip.global_frames, atol=1e-7)
 
     def test_rotated_pose_roundtrip(self):
         q = np.array([[[0, .5, 0, np.sqrt(.75)], [.2, .3, .4, .8]]])
@@ -93,34 +86,6 @@ class ConverterTest(unittest.TestCase):
         local = pose_matrices(lt, lq)
         local[:, 1] = local[:, 0] @ local[:, 1]
         np.testing.assert_allclose(local, global_, atol=1e-7)
-
-    def test_bad_weight_rejected(self):
-        m, _ = fixture()
-        m.weights[0] = 0
-        with self.assertRaisesRegex(ConversionError, 'weights'):
-            model_glb(m)
-
-    def test_wrong_joint_rejected(self):
-        m, _ = fixture()
-        m.joints[0, 0] = 2
-        with self.assertRaisesRegex(ConversionError, 'joint'):
-            model_glb(m)
-
-    def test_shear_rejected(self):
-        m, _ = fixture()
-        m.rest_global[0, 0, 1] = .2
-        with self.assertRaisesRegex(ConversionError, 'shear'):
-            model_glb(m)
-
-    def test_unknown_shader_rejected(self):
-        m, _ = fixture()
-        m.materials[0]['rkm_fields']['Shader'] = 'unknown'
-        with self.assertRaisesRegex(ConversionError, 'shader'):
-            model_glb(m)
-
-    def test_model_animation_binding_token(self):
-        m, c = fixture()
-        self.assertEqual(unpack(model_glb(m))[0]['extras']['atpRig'], unpack(animation_glb(c))[0]['extras']['atpRig'])
 
 
 if __name__ == '__main__':

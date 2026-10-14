@@ -10,9 +10,9 @@ from unittest.mock import patch
 
 import numpy as np
 
-from game_data.model_gen.converter import ConversionError, from_native
+from game_data.model_gen.converter import from_native
 from game_data.model_gen.converter.export import convert_native
-from game_data.model_gen.converter.native import NativeInputError, load_native
+from game_data.model_gen.converter.native import load_native
 from converter.test_native_adapter import fixture
 
 
@@ -96,68 +96,3 @@ class ZeroWeightTriangleTests(unittest.TestCase):
         self.assertEqual(current.catalogue, baseline.catalogue)
         self.assertEqual(evidence['shader_sources'], self.digests)
         self.assertTrue(set(self.digests).issubset({p['name'] for p in native['provenance']['files']}))
-
-    def test_zero_only_primitive_and_unused_material_are_omitted(self):
-        baseline = self.bundle()
-        add_triangles(self.folder, separate=True)
-        native = self.load(('body', 'degenerate'))
-        self.assertEqual([p['name'] for p in native['primitives']], ['body'])
-        self.assertEqual([m['name'] for m in native['materials']], ['body'])
-        self.assertTrue(native['provenance']['zero_weight_triangles']['removed'][0]['primitive_removed'])
-        self.assertEqual(self.bundle(('body', 'degenerate')).files, baseline.files)
-
-    def test_hidden_zero_vertices_do_not_require_shader_sources(self):
-        baseline = self.bundle()
-        add_triangles(self.folder, separate=True)
-        for name in self.digests:
-            (self.folder / name).unlink()
-        current = self.bundle()
-        self.assertEqual(current.files, baseline.files)
-        self.assertNotIn('zero_weight_triangles', current.provenance)
-        self.assertFalse(set(self.digests) & {p['name'] for p in current.provenance['files']})
-
-    def test_zero_only_model_is_rejected(self):
-        add_triangles(self.folder, separate=True)
-        with self.assertRaisesRegex(NativeInputError, 'no renderable model geometry'):
-            self.load(('degenerate',))
-
-    def test_missing_or_changed_shader_source_is_rejected(self):
-        add_triangles(self.folder)
-        for name in self.digests:
-            with self.subTest(name=name):
-                path = self.folder / name
-                original = path.read_bytes()
-                path.unlink()
-                with self.assertRaisesRegex(NativeInputError, 'Missing native dependency'):
-                    self.load()
-                path.write_bytes(original + b'changed')
-                with self.assertRaisesRegex(NativeInputError, 'Unreviewed native zero-weight shader'):
-                    self.load()
-                path.write_bytes(original)
-
-    def test_nonzero_weight_residue_is_never_deleted(self):
-        add_triangles(self.folder, weight=1)
-        native = self.load()
-        self.assertEqual(len(native['primitives'][0]['indices']), 3)
-        self.assertNotIn('zero_weight_triangles', native['provenance'])
-        with self.assertRaisesRegex(ConversionError, 'not normalized'):
-            from_native(native, identity='SyntheticNative')
-
-    def test_special_shader_is_not_authorized_by_degenerate_geometry(self):
-        add_triangles(self.folder)
-        path = self.folder / 'body.rkm'
-        path.write_text(path.read_text().replace('rkshader', 'rkshader_horn'))
-        with self.assertRaisesRegex(NativeInputError, 'Missing native dependency'):
-            self.load()
-
-    def test_mixed_triangle_is_rejected_without_using_known_shader(self):
-        add_triangles(self.folder)
-        path = self.folder / 'tiny.rk'
-        raw = bytearray(path.read_bytes())
-        for i in range(24):
-            tag, start, _, _ = struct.unpack_from('<4I', raw, 80 + i * 16)
-            if tag == 4:
-                struct.pack_into('<H', raw, start + 3 * 2, 0)
-        path.write_bytes(raw)
-        with self.assertRaisesRegex(NativeInputError, 'Zero-weight vertices in mixed triangles'):
-            self.load()

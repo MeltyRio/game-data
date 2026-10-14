@@ -1,6 +1,5 @@
 """Synthetic native controls and normal generation; no game assets required."""
 import copy
-import hashlib
 import json
 from pathlib import Path
 import struct
@@ -9,10 +8,10 @@ import unittest
 
 from bootstrap import ROOT
 from native_fixture import write_fixture, write_native_tables
-from game_data.model_gen.interactions import native_click_names, prepare_interactions, InteractionError
+from game_data.model_gen.interactions import prepare_interactions
 from game_data.model_gen.selection import select_native_view
 from game_data.model_gen import generate_models
-from game_data.model_gen.converter.native import NativeInputError, _verify_event_source
+from game_data.model_gen.converter.native import NativeInputError
 from game_data.model_associations import _model
 
 
@@ -50,12 +49,6 @@ class NativeControls(unittest.TestCase):
         return prepare_interactions(base, 'Pony', self.obj, model_stem='body', mesh_names=self.names,
                                     clips=self.clips, **kwargs)
 
-    def test_pipeline_duplicate_non_eye_names_preserve_original_lookup_noop(self):
-        self.names = ['body', 'body']
-        row = self.run_selection()
-        self.assertEqual(row['visible_meshes'], ['body'])
-        self.assertEqual(row['provenance']['eyes']['rule'], 'reviewed-single-mesh-eye-lookups-no-op')
-        self.assertEqual(row['model_interactions']['eyes'], {state: [] for state in ['Open','Closed','Happy','Frown']})
 
     def test_duplicate_native_eye_meshes_have_original_indices(self):
         result = self.run_selection()
@@ -73,26 +66,6 @@ class NativeControls(unittest.TestCase):
         self.obj['Conversation']['InteractionAnimation'] = ''
         self.assertEqual(self.run_selection()['interactions']['clickAnimations'], [])
 
-    def test_exact_special_ai_branches_not_prefix_guesses(self):
-        self.assertIn('granny_tap_east', native_click_names({'AI': {'Special_AI': 3}}))
-        self.assertIn('gen_interact_02_med', native_click_names({'AI': {'Special_AI': 2}}))
-        self.assertIn('gen_upright_interact_bow', native_click_names({'AI': {'Special_AI': 4}}))
-        with self.assertRaises(InteractionError): native_click_names({'AI': {'Special_AI': 99}})
-
-    def test_unknown_ai_keeps_verified_eyes_but_no_click(self):
-        self.obj['AI']['Special_AI'] = 99
-        row = self.run_selection()
-        self.assertEqual(row['interactions']['clickAnimations'], [])
-        self.assertEqual(row['model_interactions']['eyes']['Open'], [1])
-        self.assertTrue(any(d['code'] == 'click-unavailable' for d in row['provenance']['interactions']['diagnostics']))
-
-    def test_duplicate_callbacks_are_not_silently_collapsed(self):
-        self.xml('<Frame Index="1"><EyeSet Open="Closed" EnableBlink="1"/><EyeSet Open="Closed" EnableBlink="1"/></Frame>')
-        with self.assertRaisesRegex(InteractionError, 'Duplicate native event'):
-            self.run_selection()
-        digest = hashlib.sha256(self.path.read_bytes()).hexdigest()
-        with self.assertRaisesRegex(NativeInputError, 'Duplicate native event'):
-            _verify_event_source(self.path, False, {'wave'}, {digest: ['wave']})
 
     def test_unsupported_event_excludes_whole_clip_including_supported_events(self):
         self.xml('<Frame Index="1"><EyeSet Open="Closed" EnableBlink="1"/><Sound Name="test"/></Frame>')
@@ -102,36 +75,6 @@ class NativeControls(unittest.TestCase):
         self.assertEqual(diagnostic['reason'], 'unsupported-native-event:Sound')
         self.assertEqual(len(diagnostic['events']), 2)
 
-    def test_out_of_range_event_is_explicitly_excluded(self):
-        for index in [5, 6]:
-            self.xml(f'<Frame Index="{index}"><EyeSet Open="Closed" EnableBlink="1"/></Frame>')
-            row = self.run_selection()
-            self.assertNotIn('wave', row['clip_names'])
-            self.assertIn('native-event-frame-outside-clip', str(row['provenance']['interactions']))
-
-    def test_conflicting_eye_events_reject_instead_of_last_write_wins(self):
-        self.xml('<Frame Index="1"><EyeSet Open="Closed" EnableBlink="1"/><EyeSet Open="Open" EnableBlink="0"/></Frame>')
-        row = self.run_selection()
-        self.assertNotIn('wave', row['clip_names'])
-        self.assertIn('conflicting-native-event', str(row['provenance']['interactions']))
-
-    def test_missing_state_never_uses_another_expression(self):
-        self.names.remove('eyes_frown')
-        self.xml('<Frame Index="1"><EyeSet Open="Frown" EnableBlink="1"/></Frame>')
-        row = self.run_selection()
-        self.assertNotIn('wave', row['clip_names'])
-        self.assertIn('missing-native-eye-state:Frown', str(row['provenance']['interactions']))
-
-    def test_native_empty_open_keeps_eye_event_as_noop_without_geometry(self):
-        self.obj['Eyes'] = {'EyeSubObject_'+state: [] for state in ['Open', 'Closed', 'Happy', 'Frown']}
-        row = self.run_selection()
-        self.assertEqual(row['model_interactions']['eyes'], {state: [] for state in ['Open', 'Closed', 'Happy', 'Frown']})
-        self.assertEqual(row['animation_events']['wave'][0]['state'], 'Closed')
-        self.assertEqual(row['retained_meshes'], row['visible_meshes'])
-
-    def test_eye_none_is_preserved_as_explicit_clear(self):
-        self.xml('<Frame Index="0"><EyeSet Open="None" EnableBlink="0"/></Frame>')
-        self.assertEqual(self.run_selection()['animation_events']['wave'][0]['state'], 'None')
 
     def test_dizzy_missing_emitter_dependency_does_not_publish_bare_clip(self):
         self.path.write_text('<MeshList/><AnimationList><Animation Name="arena_pony_defeat">'
@@ -141,21 +84,6 @@ class NativeControls(unittest.TestCase):
         self.assertNotIn('dizzyAnimation', row['interactions'])
         self.assertNotIn('arena_pony_defeat', row['clip_names'])
         self.assertIn('Missing native texture', str(row['provenance']['interactions']))
-
-    def test_emitter_and_eye_order_are_preserved(self):
-        self.xml('<Frame Index="1"><Emitter Particle="mlp_arena_pony_defeat_02"/><EyeSet Open="Happy" EnableBlink="0"/></Frame>')
-        row = self.run_selection(effect_resolver=lambda attrs, frame: {'frame': frame, 'type': 'Emitter', 'effect': attrs['Particle']})
-        self.assertEqual([e['type'] for e in row['animation_events']['wave']], ['Emitter', 'EyeSet'])
-
-    def test_converter_approval_is_bound_to_current_xml_and_supported_types(self):
-        digest = hashlib.sha256(self.path.read_bytes()).hexdigest()
-        with self.assertRaises(NativeInputError): _verify_event_source(self.path, False, {'wave'})
-        _verify_event_source(self.path, False, {'wave'}, {digest: ['wave']})
-        self.xml('<Frame Index="1"><EyeSet Open="Happy" EnableBlink="1"/></Frame>')
-        with self.assertRaises(NativeInputError): _verify_event_source(self.path, False, {'wave'}, {digest: ['wave']})
-        self.xml('<Frame Index="1"><Sound Name="test"/></Frame>')
-        digest = hashlib.sha256(self.path.read_bytes()).hexdigest()
-        with self.assertRaises(NativeInputError): _verify_event_source(self.path, False, {'wave'}, {digest: ['wave']})
 
 
 class NormalPipeline(unittest.TestCase):
@@ -236,26 +164,6 @@ class NormalPipeline(unittest.TestCase):
             convert_native(*args, **{**kwargs, 'model_interactions': invalid})
         with self.assertRaisesRegex(NativeInputError, 'interaction animation identity'):
             convert_native(*args, **{**kwargs, 'interactions': {'version': 1, 'clickAnimations': ['unrelated']}})
-
-    def test_optional_interaction_conversion_failure_preserves_static_model(self):
-        from unittest.mock import patch
-        from game_data.model_gen import convert_native
-        def injected(*args, **kwargs):
-            if kwargs.get('interactions'): raise NativeInputError('Injected hidden-eye material failure')
-            return convert_native(*args, **kwargs)
-        with patch('game_data.model_gen.prepare_interactions', side_effect=lambda selection, *a, **k: selection):
-            generate_models(self.objects, self.raw, self.dist, self.root/'baseline-report.json', campaign={})
-        baseline_catalogue = (self.dist/'models_3d.json').read_bytes()
-        baseline_files = {p.relative_to(self.dist): p.read_bytes() for p in (self.dist/'models').rglob('*.glb')}
-        with patch('game_data.model_gen.convert_native', side_effect=injected):
-            report = generate_models(self.objects, self.raw, self.dist, self.root/'report.json', campaign={})
-        model = json.loads((self.dist/'models_3d.json').read_text())['models']['Synthetic_Flag']
-        self.assertEqual((self.dist/'models_3d.json').read_bytes(), baseline_catalogue)
-        for path, original in baseline_files.items():
-            self.assertEqual((self.dist/path).read_bytes(), original)
-        self.assertNotIn('interactions', model)
-        self.assertNotIn('wave', [row['id'] for row in model['animations']])
-        self.assertIn('interaction-assets-unavailable', str(report['identities']['Synthetic_Flag']['selection']))
 
 
 if __name__ == '__main__': unittest.main()

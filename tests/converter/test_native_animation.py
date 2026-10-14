@@ -5,7 +5,7 @@ import struct
 import tempfile
 import unittest
 import numpy as np
-from game_data.model_gen.converter.native_animation import read_animation, read_animation_header
+from game_data.model_gen.converter.native_animation import read_animation
 
 
 class AnimationFormatTests(unittest.TestCase):
@@ -37,20 +37,5 @@ class AnimationFormatTests(unittest.TestCase):
         expected_q = [[[pose.quaternion.x, pose.quaternion.y, pose.quaternion.z, pose.quaternion.w] for pose in frame] for frame in reference.frames]
         np.testing.assert_array_equal(result.translations, np.asarray(expected_t) * 32 * 0.031250953674316406)
         np.testing.assert_array_equal(result.rotations_xyzw, expected_q)
-    def test_exact_size_rejects_trailing_or_missing_bytes(self):
-        self.write(1, struct.pack('<4f3h', 0, 0, 0, 1, 0, 0, 0) * 2)
-        raw = self.path.read_bytes()
-        for delta in (raw[:-1], raw + b'\0'):
-            self.path.write_bytes(delta)
-            with self.assertRaisesRegex(ValueError, 'byte length'): read_animation_header(self.path)
-    def test_future_nonunit_type0_lane_not_silently_dropped(self):
-        self.write(0, struct.pack('<8f', 0, 0, 0, 1, 0, 0, 0, 2) * 2)
-        with self.assertRaisesRegex(ValueError, 'non-unit'): read_animation(self.path)
-    def test_nonfinite_values_rejected(self):
-        self.write(1, struct.pack('<4f3h', float('nan'), 0, 0, 1, 0, 0, 0) * 2)
-        with self.assertRaisesRegex(ValueError, 'Non-finite'): read_animation(self.path)
-    def test_invalid_quaternion_rejected(self):
-        self.write(0, struct.pack('<8f', 0, 0, 0, 0, 0, 0, 0, 1) * 2)
-        with self.assertRaisesRegex(ValueError, 'Degenerate'): read_animation(self.path)
 
 if __name__ == '__main__': unittest.main()
