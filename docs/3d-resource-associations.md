@@ -34,7 +34,8 @@ Normal generation uses `ponybook-preferred`: a strictly verified PonyBook defaul
 is selected when its native visibility agrees with the independently validated
 World preview. Otherwise that World result is retained with the precise Book
 failure in private diagnostics. Pets retain their existing editor-eye policy.
-This does not implement the complete PonyBook UI, idle autoplay or interactions.
+This does not implement the complete PonyBook UI or idle autoplay. The optional
+native interaction profile below supplies blink, click and dizzy data to ATP.
 
 The build excludes objects with the existing public `npc` tag from the 3D
 catalogue. It keeps their ordinary GameData entries and native discovery
@@ -155,22 +156,19 @@ unsupported. Controller overlaps without a verified ordering are rejected.
 
 ### Pose and event policy
 
-The strict PonyBook profile uses the native **constructor static pose**. The RK
-drawable loader queries the exact name `default`; only a true name miss selects
-the original CSV row zero. It samples that clip's first frame and stops the
-animation layer. A rejected `default`, an invalid original first row when needed,
-or an event-bearing selected pose is not a name miss and cannot select another
-working clip. The private record preserves the requested name and resolution.
-This chain was traced in the matching 11.4.3c ARM64 client; it does not establish
-which frame appears on screen after the native UI's first update.
+The strict PonyBook profile displays the **first frame of the resolved
+Conversation idle**, without autoplay. An absent `Conversation` group requests
+`gen_idle_00`; a present group uses its exact `IdleAnimation` string. An empty or
+rejected declaration fails strict Book selection. Only a true name miss may use
+the verified original CSV row zero; there is no prefix expansion. If the idle
+has events in either Book or World XML, strict selection rejects it and
+`ponybook-preferred` retains the independently validated World preview.
 
-Conversation idle is separate. An absent `Conversation` group requests the
-native `gen_idle_00` default; a present group uses its exact `IdleAnimation`
-string. An explicitly empty or unsupported declaration fails strict Book
-selection. There is no CSV prefix expansion. Exact lookup, including the
-reviewed original-row-zero rule for a true name miss, is validated independently
-of the constructor pose. A valid event-free idle is available as an action;
-generation does not reproduce the later idle/blink controller or autoplay it.
+The native constructor's exact `default` lookup and original-row-zero fallback
+are validated separately, and its event-free clip remains an available action.
+Private provenance records both resolutions and identifies the actual display
+rest. AdditionalObject placement is computed from that generated parent rest;
+its independent model and animation library remain unchanged.
 
 The retained World preview uses explicit `Conversation.IdleAnimation`, otherwise
 the first nonempty `LeftIdleAnimationList` entry, as its documented viewer policy.
@@ -185,9 +183,10 @@ native absence evidence. Other reviewed integer kinds (`0`, `1`, `3`, `4`, `5`)
 use `pony_type01.xml`; missing or unknown kinds are refused. PonyBook instead
 loads the XML identified by `Animation.Rig_MediumLOD`.
 
-Book selection retains World-validated, explicitly declared town actions, then
-excludes actions requiring events in either XML context. Constructor pose and
-later Book idle are checked against both contexts too. The converter independently
+Base Book selection retains World-validated, explicitly declared town actions,
+excluding event-bearing actions until the interaction compiler below verifies
+all their events. Constructor pose and later Book idle retain their existing
+strict checks against both contexts. The converter independently
 validates and hashes both sources before producing a bundle, including when the
 World branch has a positively absent controller. Missing extracted XML never
 means that events are absent. Unknown events remain unsupported.
@@ -303,14 +302,68 @@ native name use one key. Legacy flat hash and digest-directory model keys remain
 readable. Direct calls to `convert_native` retain flat hash keys unless filename
 options are supplied. Named model and animation keys must match their
 catalogue Object ID and animation ID respectively. Models
-contain geometry, textures and a rest skeleton; animations contain only the
-compatible skeleton and STEP tracks. Ordinary models keep schemaVersion 1 and
+contain geometry, textures and a rest skeleton; animations contain the
+compatible skeleton and STEP tracks, optional native interpolation samples,
+and explicitly versioned native events for interactive profiles. Ordinary models keep schemaVersion 1 and
 their existing row contract. A catalogue with an `additionalActor` or native
 material UV clock uses schemaVersion 2, which requires the corresponding ATP
 viewer capability. Additional actors use nested model/animation references with
 their own rig key; shared hash assets still use the same namespace. Private source
 names, hashes, selection evidence and exclusions go to
 `raw/model-associations.json`, never public dist.
+
+### Native interaction profile
+
+Normal generation compiles the already resolved Pony/Costume model's native eye
+names, PonyBook tap branches and the exact `arena_pony_defeat` CSV action. It
+does not discover another rig or substitute a similarly named action. The
+native PonyBook branches use `Conversation.InteractionAnimation` when the
+Conversation block exists; otherwise they use reviewed `AI.Special_AI` branches.
+The viewer randomly chooses among available native branch entries; it does not
+reproduce the game's remote-service random gate or orientation-based choice.
+The native branch evidence is Android client 11.4.2a at
+`0x87337c..0x87347c` / `0x8736d0..0x873a44`, also used by the independently
+validated reference viewer. No client binary is distributed here.
+
+A catalogue with these capabilities uses `schemaVersion: 3` and each interactive
+row adds `interactions: {version: 1, clickAnimations: [...], dizzyAnimation?: id}`.
+Every referenced ID must be in that row's successfully converted animations.
+The model GLB adds `extras.atpInteractions` with version 1, native-index eye
+groups, `hiddenNodes` and any embedded emitter profile/textures. Every retained
+mesh has a separate skinned node carrying `atpNativeMeshIndex` and
+`atpDefaultVisible`. Default-hidden eye nodes are outside every scene; the
+profile-aware reader explicitly adopts them into the default scene using the
+same skeleton. Ordinary glTF readers keep the previous default appearance.
+The reader must resolve these nodes before rendering or disposing the asset.
+
+Event-bearing independent animation GLBs use `extras.atpClip.eventProfile = "ponybook-v1"`
+and ordered `events`; event-free clips retain their previous bytes and cache keys. Supported records are `EyeSet` (state, EnableBlink) and
+`Emitter` (an embedded effect key). Event frames are native CSV-relative integer
+indices, independent of fractional pose interpolation. Source XML digests bind
+the compiler's approvals, and the converter independently checks that every
+exported event exactly matches the checked source. An unsupported event, missing
+eye state, unavailable effect dependency, conflict or out-of-range event frame
+excludes the whole action with diagnostics; no bare skeletal substitute is
+published. This local version conservatively excludes out-of-range records
+instead of implementing the native clamp/equal-count behavior.
+
+The finite dizzy burst supports only the verified
+`mlp_arena_pony_defeat_02` controller, using Luna's native RKM/PVR readers and the
+original texture. Its numeric particle parameters remain in the embedded
+profile; there is no guessed head-bone binding or replacement artwork. Other
+particle controllers, SubObject action props, sound and scene events remain
+unsupported. AdditionalObject actors retain their previous independent strict
+controller and animation behavior; pets do not acquire PonyBook interactions.
+
+Open/Closed geometry must both exist, be distinct, and agree with the verified
+default eye mask before the consumer enables blinking. No eye geometry is
+invented. If optional interactive geometry or dependencies cannot convert, the
+normal generator retains its independently verified static model/event-free
+actions and records `interaction-assets-unavailable`; it publishes no interaction
+profile for that fallback. A failure of the original static conversion still
+excludes that model. Fixed model URLs, cache revalidation and non-atomic upload
+semantics are unchanged. An older catalogue/new overwritten file remains a
+digest failure rather than a silently accepted mismatched model.
 
 `model_animation_resolved` means an explicit RK/ANIM pair passed structural
 checks. `references_resolved` additionally requires usable CSV references (and

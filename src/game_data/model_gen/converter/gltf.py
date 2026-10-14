@@ -160,8 +160,44 @@ def model_glb(model: Model) -> bytes:
     # glTF MAT4 accessors are column-major.
     inverse = np.linalg.inv(model.bind_global).transpose(0,2,1).reshape(bone_count,16)
     g.document['skins'] = [{'joints': list(range(1,bone_count+1)), 'inverseBindMatrices': g.accessor(inverse,'MAT4'), 'skeleton': 0}]
-    g.document['meshes'] = [{'name': model.name, 'primitives': primitives}]
-    g.document['scenes'][0]['nodes'].append(len(nodes)); nodes.append({'name': 'SkinnedModel', 'mesh': 0, 'skin': 0})
+    if model.interactions is None:
+        g.document['meshes'] = [{'name': model.name, 'primitives': primitives}]
+        g.document['scenes'][0]['nodes'].append(len(nodes)); nodes.append({'name': 'SkinnedModel', 'mesh': 0, 'skin': 0})
+    else:
+        profile = dict(model.interactions)
+        require(profile.get('version') == 1, 'Unsupported native interaction profile')
+        g.document['extras']['atpInteractions'] = profile
+        g.document['meshes'] = []
+        hidden = []
+        for primitive, original in zip(primitives, model.primitives):
+            index = original.get('native_mesh_index')
+            shown = original.get('default_visible')
+            require(type(index) is int and index >= 0 and type(shown) is bool, 'Invalid interactive mesh identity')
+            mesh_index = len(g.document['meshes'])
+            g.document['meshes'].append({'name': original['name'], 'primitives': [primitive]})
+            target = g.document['scenes'][0]['nodes'] if shown else hidden
+            target.append(len(nodes))
+            nodes.append({'name': 'NativeMesh_' + str(index), 'mesh': mesh_index, 'skin': 0,
+                          'extras': {'atpNativeMeshIndex': index, 'atpDefaultVisible': shown}})
+        # Generic glTF readers keep the existing correct static appearance.
+        # The ATP profile consumer explicitly adopts these inactive eye meshes.
+        if hidden:
+            profile['hiddenNodes'] = hidden
+        effects = {}
+        for name, effect in (model.interaction_effects or {}).items():
+            raw = effect['png_bytes']
+            with Image.open(io.BytesIO(raw)) as image:
+                require(image.format == 'PNG', 'Emitter texture must be PNG')
+                image.verify()
+            image_index = len(g.document['images'])
+            g.document['images'].append({'bufferView': g.view(raw), 'mimeType': 'image/png'})
+            sampler_index = len(g.document['samplers'])
+            g.document['samplers'].append({'magFilter': 9729, 'minFilter': 9729, 'wrapS': 33071, 'wrapT': 33071})
+            texture_index = len(g.document['textures'])
+            g.document['textures'].append({'source': image_index, 'sampler': sampler_index})
+            effects[name] = {**effect['profile'], 'texture': texture_index}
+        if effects:
+            profile['effects'] = effects
     g.document['extensionsUsed'] = ['KHR_materials_unlit']
     if texture_transform:
         g.document['extensionsUsed'].append('KHR_texture_transform')
@@ -187,6 +223,9 @@ def animation_glb(clip: Clip) -> bytes:
             animation['channels'].append({'sampler': sampler, 'target': {'node': bone+1, 'path': path}})
     g.document['animations'] = [animation]
     g.document['extras']['atpClip'] = {'frameCount': count, 'fps': clip.fps, 'duration': count/clip.fps}
+    if clip.events is not None:
+        require(isinstance(clip.events, list), 'Invalid native clip events')
+        g.document['extras']['atpClip'].update(eventProfile='ponybook-v1', events=clip.events)
     # Standard STEP channels remain usable by ordinary/older glTF consumers.
     # Native-aware players interpolate these raw model-space samples first,
     # then derive parent-local TRS. Never normalize endpoint quaternions here.

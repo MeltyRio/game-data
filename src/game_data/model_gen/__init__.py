@@ -3,6 +3,7 @@ import hashlib
 import json
 from pathlib import Path
 import tempfile
+from xml.etree import ElementTree as ET
 
 from ..model_associations import discover_associations, write_association_report
 from ..model_paths import asset_digest, is_asset_path, model_path
@@ -10,6 +11,8 @@ from .converter import ConversionError
 from .converter.export import convert_native
 from .converter.native import NativeInputError
 from .selection import SelectionError, select_native_view
+from .interactions import InteractionError, prepare_interactions
+from .native_emitter import load_native_emitter
 from .additional import prepare_additional_actor, attach_additional_actor
 
 
@@ -124,7 +127,7 @@ def generate_models(native_objects, extracted_dir, dist_dir, report_path, *, cam
                     model_name = association['model']
                     selection = select_native_view(selection_category, obj, native_objects,
                         model_stem=association['declaration']['model'] if 'declaration' in association else Path(model_name).stem,
-                        mesh_names=report['models'][model_name]['meshes'],
+                        mesh_names=list(dict.fromkeys(report['models'][model_name]['meshes'])),
                         clips=report['csv_libraries'][association['csv']['file']]['clips'] if 'csv' in association else [],
                         extracted_dir=folder, outfit_id=identity if category == 'PonySet' else None,
                         csv_first_name=report['csv_libraries'][association['csv']['file']].get('first_declared_name'),
@@ -136,7 +139,37 @@ def generate_models(native_objects, extracted_dir, dist_dir, report_path, *, cam
                                                                  ('PonyPart', wardrobe.get('part_ids', []))]:
                         if any(_render_override(campaign, dependency_category, dep) for dep in dependency_ids):
                             raise SelectionError('campaign_visual_override_unverified', 'Wardrobe dependency override requires review')
-                    bundle = convert_native(folder/model_name, folder/association['animation'],
+                    base_selection = selection
+                    interaction_effects = {}
+                    effect_provenance = {}
+                    def resolve_emitter(attributes, frame):
+                        if set(attributes) != {'Particle'}:
+                            raise ValueError('Unsupported native emitter attributes')
+                        name = attributes['Particle']
+                        if name not in interaction_effects:
+                            profile, png, provenance = load_native_emitter(folder, name)
+                            interaction_effects[name] = {'profile': profile, 'png_bytes': png}
+                            effect_provenance[name] = provenance
+                        return {'frame': frame, 'type': 'Emitter', 'effect': name}
+                    try:
+                        selection = prepare_interactions(selection, selection_category, obj,
+                            model_stem=Path(model_name).stem,
+                            mesh_names=report['models'][model_name]['meshes'],
+                            clips=report['csv_libraries'][association['csv']['file']]['clips'],
+                            effect_resolver=resolve_emitter)
+                    except (InteractionError, UnicodeError, ET.ParseError) as error:
+                        # The already verified static scene and event-free actions
+                        # remain valid; never approve a failed optional controller.
+                        selection['provenance']['interactions'] = {
+                            'diagnostics': [{'code': 'interaction-profile-unavailable', 'reason': str(error)}]}
+                    used_effects = {event['effect'] for rows in selection.get('animation_events', {}).values()
+                                    for event in rows if event['type'] == 'Emitter'}
+                    interaction_effects = {name: interaction_effects[name] for name in used_effects}
+                    if used_effects:
+                        selection['provenance']['interactions']['effects'] = {
+                            name: effect_provenance[name] for name in used_effects}
+                    def convert_selected(selection, effects):
+                        return convert_native(folder/model_name, folder/association['animation'],
                         folder/association['csv']['file'], selection['clip_names'], identity=identity,
                         model_filename=identity, animation_filenames=True,
                         visible_meshes=selection['visible_meshes'], rest_name=selection['rest_name'],
@@ -144,7 +177,19 @@ def generate_models(native_objects, extracted_dir, dist_dir, report_path, *, cam
                         events_absent=selection.get('events_absent', False),
                         **({'additional_event_paths': selection['additional_event_paths']}
                            if selection.get('additional_event_paths') else {}),
-                        **({'user_vector': obj['UserVector']} if obj.get('UserVector') else {}))
+                        **({'user_vector': obj['UserVector']} if obj.get('UserVector') else {}),
+                        **({key: selection[key] for key in ('retained_meshes', 'interactions',
+                            'model_interactions', 'animation_events', 'event_approvals')} if 'interactions' in selection else {}),
+                        **({'interaction_effects': effects} if effects else {}))
+                    try:
+                        bundle = convert_selected(selection, interaction_effects)
+                    except (NativeInputError, ConversionError) as error:
+                        if 'interactions' not in selection:
+                            raise
+                        selection = base_selection
+                        selection['provenance']['interactions'] = {'diagnostics': [
+                            {'code': 'interaction-assets-unavailable', 'reason': str(error)}]}
+                        bundle = convert_selected(selection, {})
                     model_row = bundle.catalogue['models'][identity]
                     bundle_files = dict(bundle.files)
                     additional_provenance = None
@@ -175,10 +220,9 @@ def generate_models(native_objects, extracted_dir, dist_dir, report_path, *, cam
                             path.write_bytes(data)
                         referenced.add(key)
                     catalogue['models'][identity] = model_row
-                    if (bundle.provenance or {}).get('material_uv_clock'):
-                        catalogue['schemaVersion'] = 2
+                    catalogue['schemaVersion'] = max(catalogue['schemaVersion'], bundle.catalogue['schemaVersion'])
                     if additional_provenance is not None:
-                        catalogue['schemaVersion'] = 2
+                        catalogue['schemaVersion'] = max(catalogue['schemaVersion'], 2)
                         association['additional_actor'] = {**report['identities'][owner_id]['additional_actor'],
                             'renderer_supported': True, 'converted': True,
                             'conversion_provenance': additional_provenance}

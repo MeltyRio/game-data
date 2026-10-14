@@ -361,9 +361,9 @@ def _ponybook_view(world, *, obj, game_objects, model_stem, mesh_names, clips,
                    extracted_dir, outfit_id, csv_first_name, csv_excluded_names, **unused):
     """Compile a public default appearance, retaining verified town actions.
 
-    No player equipment or alternate owner is inferred. The first frame of the
-    native loader's default clip is the static constructor pose. Conversation
-    idle is separately available, not a simulated idle/blink controller.
+    No player equipment or alternate owner is inferred. Display the first frame
+    of the resolved native Conversation idle, without autoplay. Keep the loader
+    constructor clip available and validate both event contexts independently.
     Missing dependencies remain errors.
     """
     animation = obj.get('Animation') or {}
@@ -419,32 +419,31 @@ def _ponybook_view(world, *, obj, game_objects, model_stem, mesh_names, clips,
         if not isinstance(csv_first_name, str) or csv_first_name not in valid or csv_first_name in rejected:
             _fail('ponybook_idle_unverified', 'Original native row-zero fallback is unverified')
         return csv_first_name, 'native-name-miss-to-original-CSV-row-zero'
-    rest, rule = resolve('default')
+    constructor, constructor_rule = resolve('default')
     idle, idle_rule = resolve(requested)
     world_events = set()
     if world['event_path'] is not None:
         _, world_events, _, _ = _events(world['event_path'], model_stem, set(mesh_names))
     all_events = eventful | world_events
-    if rest in all_events:
-        _fail('ponybook_idle_requires_events', 'PonyBook constructor pose requires unsupported events: ' + rest)
+    if constructor in all_events:
+        _fail('ponybook_idle_requires_events', 'PonyBook constructor pose requires unsupported events: ' + constructor)
+    if idle in all_events:
+        _fail('ponybook_idle_requires_events', 'PonyBook display idle requires unsupported events: ' + idle)
     selected = [name for name in world['clip_names'] if name not in eventful]
     excluded = list(world['excluded_clips'])
     for name in world['clip_names']:
         if name in eventful:
             excluded.append({'name': name, 'reason': 'ponybook_native_events_not_supported',
                              'fields': world['provenance']['clip_fields'].get(name, [])})
-    if rest not in selected: selected.append(rest)
-    if idle not in all_events and idle not in selected:
-        selected.append(idle)
-    elif idle in all_events and not any(row['name'] == idle for row in excluded):
-        excluded.append({'name': idle, 'reason': 'native_events_not_supported',
-                         'fields': ['PonyBook.Conversation.IdleAnimation']})
+    if constructor not in selected: selected.append(constructor)
+    if idle not in selected: selected.append(idle)
     # Validate/hash both sources in the converter too. A missing world event
     # controller does not imply that a present PonyBook XML can be ignored.
     extra = [] if world['event_path'] == path else [path]
     fields = {name: list(values) for name, values in world['provenance']['clip_fields'].items()}
-    fields.setdefault(rest, []).append('native ConversationPony constructor: default / original CSV row zero')
+    fields.setdefault(constructor, []).append('native ConversationPony constructor: default / original CSV row zero')
     fields.setdefault(idle, []).append('PonyBook.Conversation.IdleAnimation')
+    idle_field = 'Conversation.IdleAnimation' if conversation is not None else 'native absent-Conversation default'
     provenance = {**world['provenance'], 'clip_fields': fields,
         'display': {'requested': 'ponybook-default', 'selected': 'ponybook-default',
                     'context': 'public default appearance; no player state or native UI controller'},
@@ -453,14 +452,15 @@ def _ponybook_view(world, *, obj, game_objects, model_stem, mesh_names, clips,
                      'eyes': names, 'eye_controller_enabled': bool(names['Open']),
                      'visibility_order': ['Eyes', 'MeshList', 'wardrobe'],
                      'world_visibility_equivalent': True,
+                     'constructor': {'requested_name': 'default', 'name': constructor,
+                                     'rule': constructor_rule,
+                                     'field': 'native ConversationPony RK drawable constructor'},
                      'idle': {'requested_name': requested, 'name': idle, 'rule': idle_rule,
-                              'playable': idle not in all_events,
-                              'field': 'Conversation.IdleAnimation' if conversation is not None else 'native absent-Conversation default'}},
-        'rest': {'field': 'native ConversationPony RK drawable constructor',
-                 'requested_name': 'default', 'name': rest, 'rule': rule,
-                 'context': 'native constructor static first frame; not later Conversation idle autoplay'},
+                              'playable': True, 'field': idle_field}},
+        'rest': {'field': idle_field, 'requested_name': requested, 'name': idle, 'rule': idle_rule,
+                 'context': 'PonyBook display idle first frame; no autoplay'},
         'clip_scope': 'verified object-declared town/Conversation actions plus native constructor pose/PonyBook idle; both event contexts checked'}
-    return {**world, 'rest_name': rest, 'clip_names': selected, 'additional_event_paths': extra,
+    return {**world, 'rest_name': idle, 'clip_names': selected, 'additional_event_paths': extra,
             'provenance': provenance, 'excluded_clips': excluded}
 
 

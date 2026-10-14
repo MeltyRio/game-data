@@ -193,7 +193,8 @@ class ModelGeneration(unittest.TestCase):
         selection = report['identities']['Synthetic_Flag']['selection']
         self.assertEqual(selection['display']['requested'], 'ponybook-preferred')
         self.assertEqual(selection['display']['selected'], 'ponybook-default')
-        self.assertEqual(selection['rest']['name'], 'bind')
+        self.assertEqual(selection['rest']['name'], 'rest')
+        self.assertEqual(selection['ponybook']['constructor']['name'], 'bind')
         self.assertEqual(selection['ponybook']['idle']['name'], 'rest')
         self.assertEqual({a['id'] for a in row['animations']}, {'wave', 'rest', 'bind'})
         self.assertEqual({e['name'] for e in report['identities']['Synthetic_Flag']['excluded_clips']},
@@ -230,9 +231,11 @@ class ModelGeneration(unittest.TestCase):
         self.assertEqual(restored['generation']['display_profiles'], {'ponybook-default': 1})
         selection = restored['identities']['Synthetic_Flag']['selection']
         self.assertNotIn('ponybook_unavailable', selection['display'])
-        self.assertEqual(selection['rest']['name'], 'bind')
+        self.assertEqual(selection['rest']['name'], 'rest')
+        self.assertEqual(selection['ponybook']['constructor']['name'], 'bind')
         self.assertEqual(row['path'], references['path'])
-        self.assertNotEqual(row['sha256'], references['sha256'])
+        # Both verified contexts choose the same idle and visible geometry.
+        self.assertEqual(row['sha256'], references['sha256'])
         self.assertEqual({a['id'] for a in row['animations']}, {'wave', 'rest', 'bind'})
 
     def test_normal_generation_passes_both_contexts_to_real_converter_validation(self):

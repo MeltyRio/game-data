@@ -176,7 +176,7 @@ def prepare_model_upload(dist_folder: Path):
         raise ValueError('Non-finite value in 3D catalogue: ' + value)
     catalogue = json.loads(data, parse_constant=invalid_constant)
     if (not isinstance(catalogue, dict) or type(catalogue.get('schemaVersion')) is not int
-            or catalogue['schemaVersion'] not in (1, 2) or not isinstance(catalogue.get('models'), dict)):
+            or catalogue['schemaVersion'] not in (1, 2, 3) or not isinstance(catalogue.get('models'), dict)):
         raise ValueError('Unsupported 3D catalogue')
     assets = {}
     def asset(ref, name=None, *, fixed_model=False):
@@ -219,6 +219,16 @@ def prepare_model_upload(dist_folder: Path):
                     or animation['rigKey'] != model['rigKey']):
                 raise ValueError('Invalid or incompatible 3D animation')
             ids.add(name)
+        if 'interactions' in model:
+            profile = model['interactions']
+            if (catalogue['schemaVersion'] != 3 or not isinstance(profile, dict)
+                    or set(profile) not in ({'version', 'clickAnimations'}, {'version', 'clickAnimations', 'dizzyAnimation'})
+                    or type(profile.get('version')) is not int or profile['version'] != 1
+                    or not isinstance(profile.get('clickAnimations'), list)
+                    or any(not isinstance(name, str) or name not in ids for name in profile['clickAnimations'])
+                    or len(profile['clickAnimations']) != len(set(profile['clickAnimations']))
+                    or ('dizzyAnimation' in profile and profile['dizzyAnimation'] not in ids)):
+                raise ValueError('Invalid native interaction catalogue profile')
 
     def additional_actor(child):
         if (not isinstance(child, dict) or 'additionalActor' in child
@@ -256,7 +266,7 @@ def prepare_model_upload(dist_folder: Path):
             raise ValueError('Invalid 3D model identity')
         actor(model, identity=identity)
         if 'additionalActor' in model:
-            if catalogue['schemaVersion'] != 2:
+            if catalogue['schemaVersion'] not in (2, 3):
                 raise ValueError('3D additional actors require catalogue schema 2')
             additional_actor(model['additionalActor'])
     return data, assets

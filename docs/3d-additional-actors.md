@@ -131,7 +131,9 @@ The nested model's animation rig keys match that model, not its parent. There
 are no nested children. A catalogue containing this required capability uses
 `schemaVersion: 2`, so older schema-1 clients reject it instead of silently
 showing an incomplete model. A catalogue with only ordinary models remains
-schema 1; material UV clocks also require schema 2.
+schema 1; material UV clocks also require schema 2. A parent with the optional
+PonyBook interaction profile uses schema 3; its child retains the same strict
+independent controller described here.
 
 Both parent and child bundles must finish successfully, and all their asset keys
 and content digests must validate, before any scene files are staged. Shared child bundles

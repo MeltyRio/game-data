@@ -31,16 +31,16 @@ per-character configuration for the generation pipeline.
 distinct additional source is parsed and validated for all selected actions and
 the rest clip using the same strict event checks as `event_path`. Missing or
 malformed XML, unsupported selected attributes and selected native events fail
-conversion. `events_absent=True` applies only to the primary source and never
+conversion by default. `events_absent=True` applies only to the primary source and never
 skips these additional checks. Repeated resolved paths are checked once; source
 names and hashes remain private provenance. The default empty collection
 preserves the existing single-source API and does not change GLB serialization.
 
 The normal stage uses these inputs for its `ponybook-preferred` display policy:
-verified native constructor rest and Book visibility, retaining World-validated
-actions only after both event contexts are checked. A Book selection failure
-retains an independently validated World preview with a diagnostic; this choice
-belongs to the caller, not a converter fallback. Pets retain their existing
+the first frame of a verified event-free PonyBook idle and Book visibility,
+retaining World-validated actions only after both event contexts are checked.
+A Book selection failure retains an independently validated World preview with
+a diagnostic; this choice belongs to the caller, not a converter fallback. Pets retain their existing
 editor-eye policy, and attached actors remain a separate World extension.
 The converter does not simulate PonyBook idle autoplay or UI interactions.
 
@@ -54,6 +54,17 @@ that provenance and all local paths.
 The catalogue contains a `models` object keyed by ATP identity. Ordinary
 bundles use `schemaVersion: 1`; a required native material UV clock uses version2.
 The surrounding generator also uses version2 for declared additional actors.
+An explicit, source-bound native interaction profile uses version3. Its caller
+supplies retained meshes, native eye indices, click/dizzy IDs, compiled events
+and exact source XML digest approvals. The converter validates the retained
+indices and compares every compiled event to its parsed original record. Unknown
+or omitted events are errors. Hidden eye nodes remain outside all default scenes
+and are listed in `extras.atpInteractions.hiddenNodes`; consumers must attach
+these nodes to the default scene before rendering or releasing them. Animation
+GLBs carry `atpClip.eventProfile = "ponybook-v1"` and ordered `events` without
+changing standard STEP channels or native interpolation samples. The normal
+pipeline supplies these low-level arguments automatically; users do not maintain
+per-character maps. See the [pipeline contract](../../../../docs/3d-resource-associations.md#native-interaction-profile).
 Older readers must reject the new version rather than show an incomplete scene. Each row has `path`, `sha256`, `bytes`, `rigKey` and `animations`.
 Animation rows also have `id`, `name` and `duration` in seconds. Paths are asset
 keys resolved by ATP's existing `createAssetUrl`. Normal generation uses
@@ -219,7 +230,7 @@ fragment shader discards every pixel when x < .001. With no explicit RKM vector,
 the converter retains the mesh, rig, texture and weights and emits standard glTF
 MASK with alpha zero and cutoff .001. This preserves the inactive default without
 writing depth. Explicit vectors and task-driven glow require an unsupported
-controller; selected native event actions are still rejected.
+controller; selected native event actions require the explicit source-bound interaction profile.
 
 For `rkponyhair0`, the caller supplies the native object's `user_vector` dict
 with exactly `UserVectorSpeed`, `RangeMin` and `RangeMax`. The authored GPU x is
@@ -259,7 +270,7 @@ embedded GLBs, independent clips, digest paths and conversion without writes.
 
 Props, companion orchestration, event execution, clothing assembly and task
 scenes remain outside this core. Special shaders are limited to the reviewed
-default-horn and native hair-clock rules above. Selected clips with events, unknown formats,
+default-horn and native hair-clock rules above. Selected clips with unapproved events, unknown formats,
 missing dependencies, non-rigid poses and incompatible layouts fail explicitly.
 No future-version compatibility is implied. Newly converted resources still
 require independent glTF validation and browser render/playback verification.

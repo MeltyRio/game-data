@@ -39,6 +39,8 @@ class Model:
     primitives: list[dict]
     materials: list[dict]
     scale: float = 1.0
+    interactions: dict | None = None
+    interaction_effects: dict | None = None
 
 
 @dataclass
@@ -51,6 +53,7 @@ class Clip:
     # after mixing, so matrices alone cannot recover its fractional poses.
     native_translations: np.ndarray | None = None
     native_rotations_xyzw: np.ndarray | None = None
+    events: list[dict] | None = None
 
 
 def rig_from_native(native):

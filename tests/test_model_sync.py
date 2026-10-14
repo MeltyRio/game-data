@@ -124,6 +124,23 @@ class ModelSync(unittest.TestCase):
         (self.dist/'game_objects.json').write_text('{ "example": true }')
         self.client.objects[self.bucket, 'manifest.json'] = {'Body': b'old manifest', 'Metadata': {}}
 
+    def test_schema_three_native_interaction_closure(self):
+        self.catalogue['schemaVersion'] = 3
+        self.model['interactions'] = {'version': 1, 'clickAnimations': ['idle'], 'dizzyAnimation': 'idle'}
+        self.save_catalogue()
+        self.code['prepare_model_upload'](self.dist)
+        for profile in [{'version': 1, 'clickAnimations': ['missing']},
+                        {'version': 1, 'clickAnimations': ['idle', 'idle']},
+                        {'version': True, 'clickAnimations': []},
+                        {'version': 1, 'clickAnimations': [], 'dizzyAnimation': 'missing'},
+                        {'version': 1, 'clickAnimations': [], 'unknown': []}]:
+            self.model['interactions'] = profile; self.save_catalogue()
+            with self.subTest(profile=profile), self.assertRaises(ValueError):
+                self.code['prepare_model_upload'](self.dist)
+        self.model['interactions'] = {'version': 1, 'clickAnimations': []}
+        self.catalogue['schemaVersion'] = 2; self.save_catalogue()
+        with self.assertRaises(ValueError): self.code['prepare_model_upload'](self.dist)
+
     def write_asset(self, data):
         digest = hashlib.sha256(data).hexdigest()
         key = f'models/3d/{digest}.glb'

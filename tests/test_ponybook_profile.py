@@ -49,11 +49,34 @@ class PonyBookProfileTests(unittest.TestCase):
             self.select(**kwargs)
         self.assertEqual(error.exception.code, code)
 
+    def test_display_rest_is_resolved_idle_and_constructor_stays_available(self):
+        result = self.select()
+        self.assertEqual(result['rest_name'], 'gen_idle_00')
+        self.assertEqual(result['provenance']['rest']['requested_name'], 'gen_idle_00')
+        self.assertEqual(result['provenance']['rest']['name'], 'gen_idle_00')
+        constructor = result['provenance']['ponybook']['constructor']
+        self.assertEqual(constructor['requested_name'], 'default')
+        self.assertEqual(constructor['name'], 'bind')
+        self.assertEqual(constructor['rule'], 'native-name-miss-to-original-CSV-row-zero')
+        self.assertIn('bind', result['clip_names'])
+
+    def test_world_idle_event_blocks_book_and_preserves_verified_world(self):
+        self.xml('world', ['world_event', 'gen_idle_00'])
+        self.fails('ponybook_idle_requires_events')
+        world = self.select('world-preview')
+        result = self.select('ponybook-preferred')
+        for field in ['rest_name', 'visible_meshes', 'clip_names', 'event_path', 'events_absent']:
+            self.assertEqual(result[field], world[field])
+        self.assertEqual(result['rest_name'], 'town_idle')
+        self.assertEqual(result['provenance']['display']['ponybook_unavailable']['code'],
+                         'ponybook_idle_requires_events')
+        self.assertNotIn('ponybook', result['provenance'])
+
     def test_constructor_pose_and_later_idle_are_separate(self):
         result = self.select()
-        self.assertEqual(result['rest_name'], 'bind')
+        self.assertEqual(result['rest_name'], 'gen_idle_00')
         self.assertEqual(result['clip_names'], ['town_idle', 'town_walk', 'bind', 'gen_idle_00'])
-        self.assertEqual(result['provenance']['rest']['requested_name'], 'default')
+        self.assertEqual(result['provenance']['ponybook']['constructor']['requested_name'], 'default')
         self.assertEqual(result['provenance']['ponybook']['idle']['name'], 'gen_idle_00')
         self.assertEqual(result['visible_meshes'], ['body', 'eyes_open'])
         self.assertNotIn('foreign', result['clip_names'])
@@ -61,7 +84,10 @@ class PonyBookProfileTests(unittest.TestCase):
 
     def test_explicit_constructor_default_never_uses_first_row(self):
         self.clips.append({'name': 'default', 'start': 27, 'end': 27, 'fps': 15})
-        self.assertEqual(self.select()['rest_name'], 'default')
+        result = self.select()
+        self.assertEqual(result['rest_name'], 'gen_idle_00')
+        self.assertEqual(result['provenance']['ponybook']['constructor']['name'], 'default')
+        self.assertIn('default', result['clip_names'])
 
     def test_original_first_row_not_filtered_first_valid_clip(self):
         self.fails('ponybook_idle_unverified', csv_first_name='bad_original', csv_excluded_names=['bad_original'])
@@ -72,8 +98,10 @@ class PonyBookProfileTests(unittest.TestCase):
     def test_present_conversation_selects_exact_name_not_prefix(self):
         self.obj['Conversation'] = {'IdleAnimation': 'other_idle'}
         self.assertEqual(self.select()['provenance']['ponybook']['idle']['name'], 'other_idle')
+        self.assertEqual(self.select()['rest_name'], 'other_idle')
         self.obj['Conversation']['IdleAnimation'] = 'other'
         self.assertEqual(self.select()['provenance']['ponybook']['idle']['name'], 'bind')
+        self.assertEqual(self.select()['rest_name'], 'bind')
         self.assertNotIn('other_idle', self.select()['clip_names'])
 
     def test_empty_conversation_is_not_absent_conversation(self):
@@ -83,12 +111,16 @@ class PonyBookProfileTests(unittest.TestCase):
         self.assertEqual(result['provenance']['display']['selected'], 'world-preview')
         self.assertEqual(result['rest_name'], 'town_idle')
 
-    def test_eventful_later_idle_is_excluded_without_changing_constructor(self):
+    def test_eventful_book_idle_rejects_book_and_preserves_verified_world(self):
         self.xml('book', ['gen_idle_00'])
-        result = self.select()
-        self.assertEqual(result['rest_name'], 'bind')
-        self.assertNotIn('gen_idle_00', result['clip_names'])
-        self.assertFalse(result['provenance']['ponybook']['idle']['playable'])
+        self.fails('ponybook_idle_requires_events')
+        world = self.select('world-preview')
+        result = self.select('ponybook-preferred')
+        for field in ['rest_name', 'visible_meshes', 'clip_names', 'event_path', 'events_absent']:
+            self.assertEqual(result[field], world[field])
+        self.assertEqual(result['provenance']['display']['selected'], 'world-preview')
+        self.assertEqual(result['provenance']['display']['ponybook_unavailable']['code'],
+                         'ponybook_idle_requires_events')
 
     def test_constructor_event_blocks_strict_profile(self):
         self.xml('book', ['bind'])

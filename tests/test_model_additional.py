@@ -105,6 +105,35 @@ class AdditionalGeneration(unittest.TestCase):
         self.assertEqual(a['model'], b['model'])
         self.assertNotEqual(a['transform'], b['transform'])
 
+    def test_parent_book_idle_recomputes_placement_without_changing_child_assets(self):
+        self.prepare()
+        animation = bytearray((self.native/'flag.anim').read_bytes())
+        # Two native joints per frame: the second frame moves only the parent.
+        struct.pack_into('<3f', animation, 92 + 64 + 16, 2., 3., 4.)
+        (self.native/'flag.anim').write_bytes(animation)
+        with (self.native/'flag.csv').open('a') as stream:
+            stream.write('book_idle,1,1,15\n')
+        self.generate()
+        before = self.catalogue()['models']['Synthetic_Flag']['additionalActor']
+        child = before['model']
+        child_bytes = {ref['path']: (self.dist/ref['path']).read_bytes()
+                       for ref in [child, *child['animations']]}
+        self.objects['Pony']['Synthetic_Flag']['Conversation']['IdleAnimation'] = 'book_idle'
+        report = self.generate()
+        after = self.catalogue()['models']['Synthetic_Flag']['additionalActor']
+        selection = report['identities']['Synthetic_Flag']['selection']
+        self.assertEqual(selection['rest']['name'], 'book_idle')
+        self.assertEqual(after['model'], before['model'])
+        self.assertEqual(after['parentRoot'], before['parentRoot'])
+        for path, data in child_bytes.items():
+            self.assertEqual((self.dist/path).read_bytes(), data)
+        old_transform = np.array(before['transform']).reshape(4, 4, order='F')
+        new_transform = np.array(after['transform']).reshape(4, 4, order='F')
+        np.testing.assert_array_equal(new_transform[:3, :3], old_transform[:3, :3])
+        np.testing.assert_allclose(new_transform[:3, 3] - old_transform[:3, 3], [2., 0., -4.], atol=1e-9)
+        proof = report['identities']['Synthetic_Flag']['additional_actor']['conversion_provenance']
+        self.assertEqual(proof['rest_root_native'], [2., 3., 4.])
+
     def test_plain_generation_stays_schema_one_and_bytes_unchanged(self):
         old = self.seed_generation()
         old_row = self.catalogue()['models']['Synthetic_Flag']

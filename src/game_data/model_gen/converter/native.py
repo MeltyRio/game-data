@@ -256,7 +256,7 @@ def _csv_clips(path: Path, frame_count: int, required: set[str], frame_boundary:
         raise NativeInputError(str(error)) from error
 
 
-def _verify_event_source(event_path, events_absent: bool, names: set[str]) -> tuple[dict, Path | None]:
+def _verify_event_source(event_path, events_absent: bool, names: set[str], event_approvals=None) -> tuple[dict, Path | None]:
     """Validate an explicit event source; absence must be asserted by discovery."""
     if bool(event_path) == bool(events_absent):
         raise NativeInputError("Supply an event XML or explicitly confirm its native source absence")
@@ -282,13 +282,49 @@ def _verify_event_source(event_path, events_absent: bool, names: set[str]) -> tu
     for animation_list in root.iter("AnimationList"):
         if any(node.tag != "Animation" for node in animation_list):
             raise NativeInputError("Unsupported native animation declaration")
+    approved = (event_approvals or {}).get(hashlib.sha256(raw).hexdigest(), [])
     for node in root.iter("Animation"):
         if node.get("Name") in names and set(node.attrib) != {"Name"}:
             raise NativeInputError("Unsupported selected native animation attributes")
         if node.get("Name") in names and len(node):
-            raise NativeInputError(f"Selected animation requires unsupported native events: {node.get('Name')}")
-    return {"status": "parsed-source-xml", "name": path.name,
-            "sha256": hashlib.sha256(raw).hexdigest(), "checked_clips": sorted(names)}, path
+            if node.get('Name') not in approved:
+                raise NativeInputError(f"Selected animation requires unsupported native events: {node.get('Name')}")
+            declaration_events = []
+            for frame in node:
+                if frame.tag != 'Frame' or set(frame.attrib) != {'Index'} or not re.fullmatch(r'\d+', frame.get('Index', '')):
+                    raise NativeInputError('Unsupported approved native event frame')
+                for event in frame:
+                    attrs = event.attrib
+                    valid = (event.tag == 'EyeSet' and set(attrs) == {'Open', 'EnableBlink'}
+                             and attrs['Open'] in {'Open', 'Closed', 'Happy', 'Frown', 'None'}
+                             and attrs['EnableBlink'] in {'0', '1'}) or (
+                             event.tag == 'Emitter' and set(attrs) == {'Particle'}
+                             and attrs['Particle'] == 'mlp_arena_pony_defeat_02')
+                    if not valid or len(event) or (event.text or '').strip():
+                        raise NativeInputError('Unsupported approved native event: ' + event.tag)
+                    key = (int(frame.get('Index')), event.tag, dict(attrs))
+                    if key in declaration_events:
+                        raise NativeInputError('Duplicate native event in one animation declaration')
+                    declaration_events.append(key)
+    evidence = {"status": "parsed-source-xml", "name": path.name,
+                "sha256": hashlib.sha256(raw).hexdigest(), "checked_clips": sorted(names)}
+    if event_approvals is not None:
+        mapped = {}
+        for node in root.iter('Animation'):
+            if node.get('Name') not in names:
+                continue
+            rows = mapped.setdefault(node.get('Name'), [])
+            for frame in node:
+                for event in frame:
+                    row = {'frame': int(frame.get('Index')), 'type': event.tag}
+                    if event.tag == 'EyeSet':
+                        row.update(state=event.get('Open'), enableBlink=event.get('EnableBlink') == '1')
+                    else:
+                        row['effect'] = event.get('Particle')
+                    if row not in rows:
+                        rows.append(row)
+        evidence['approved_events'] = mapped
+    return evidence, path
 
 
 def load_native(
@@ -305,6 +341,8 @@ def load_native(
     user_vector: dict | None = None,
     frame_boundary: str = 'reject',
     additional_event_paths: Collection[str | Path] = (),
+    retained_meshes: Collection[str] | None = None,
+    event_approvals: dict | None = None,
 ) -> dict:
     """Read native files without axis changes, retargeting, or visibility guesses.
 
@@ -316,7 +354,9 @@ def load_native(
     source declares no idle clip. The two inputs are mutually exclusive.
     Texture bytes are PNG-encoded by Pillow from Luna's decoded native image.
     Event XML or an explicit native-source absence declaration is required.
-    Selected actions with events are rejected. Ordinary rkshader and the
+    Selected actions with events are rejected unless the caller supplies exact
+    XML digest approvals for supported records. The export stage also compares
+    every compiled event to these parsed records. Ordinary rkshader and the
     source-verified default-discard horn material are supported. Hair UV
     scrolling requires the original object's explicit ``user_vector`` metadata.
     ``frame_boundary='native-clamp'`` explicitly samples upper-out-of-range
@@ -380,14 +420,19 @@ def load_native(
         if samples * animation.header.bone_count > MAX_NATIVE_JOINT_FRAME_SAMPLES:
             raise NativeInputError(f'Native sample export budget exceeds {MAX_NATIVE_JOINT_FRAME_SAMPLES} joint-frame samples')
 
-    event_source, checked_event_path = _verify_event_source(event_path, events_absent, required_names)
+    if event_approvals is not None and (not isinstance(event_approvals, dict) or any(
+            not isinstance(key, str) or len(key) != 64 or any(c not in '0123456789abcdef' for c in key)
+            or not isinstance(values, list) or any(not isinstance(name, str) for name in values)
+            for key, values in event_approvals.items())):
+        raise NativeInputError('Invalid source-bound event approvals')
+    event_source, checked_event_path = _verify_event_source(event_path, events_absent, required_names, event_approvals)
     if isinstance(additional_event_paths, (str, bytes, Path)):
         raise NativeInputError("Additional event sources must be a collection of explicit paths")
     extra_event_sources, extra_event_files = [], []
     for source in dict.fromkeys(Path(p).resolve() for p in additional_event_paths):
         if source == checked_event_path:
             continue
-        evidence, checked = _verify_event_source(source, False, required_names)
+        evidence, checked = _verify_event_source(source, False, required_names, event_approvals)
         extra_event_sources.append(evidence)
         extra_event_files.append(checked)
 
@@ -395,7 +440,10 @@ def load_native(
     visible = set(visible_meshes)
     if not visible or not visible.issubset(mesh_names):
         raise NativeInputError("Explicit visible submesh selection is missing or invalid")
-    retained_indices = {i for i, name in enumerate(mesh_names) if name in visible}
+    retained = visible if retained_meshes is None else set(retained_meshes)
+    if not visible <= retained or not retained <= set(mesh_names):
+        raise NativeInputError('Invalid explicit retained submesh selection')
+    retained_indices = {i for i, name in enumerate(mesh_names) if name in retained}
     positions = np.array([[vert.pos.x, vert.pos.y, vert.pos.z] for vert in model.verts], dtype=np.float64)
     texcoords = np.array([[vert.u, vert.v] for vert in model.verts], dtype=np.float64)
     joints = np.array([[item.bone for item in vert.bones] for vert in model.verts], dtype=np.int64)
@@ -513,6 +561,8 @@ def load_native(
         if triangles.min() < 0 or triangles.max() >= len(positions):
             raise NativeInputError(f"Native face index out of range: {mesh.name}")
         primitive = {"name": mesh.name, "indices": triangles, "material": material_ids[mesh.material_index]}
+        if retained_meshes is not None:
+            primitive.update(native_mesh_index=native_mesh_index, default_visible=mesh.name in visible)
         primitives.append(primitive)
 
     primitives, materials, zero_weight_evidence, shader_dependencies = _remove_collapsed_zero_weight_triangles(
@@ -530,6 +580,14 @@ def load_native(
                 "rotations_xyzw": animation.rotations_xyzw[start:end + 1]}
 
     clips = [{**by_name[name], "event_source_status": event_source["status"], **transforms(by_name[name]["start"], by_name[name]["end"])} for name in selected]
+    if event_approvals is not None:
+        for clip in clips:
+            events = []
+            for source in [event_source, *extra_event_sources]:
+                for event in source.get('approved_events', {}).get(clip['name'], []):
+                    if event not in events:
+                        events.append(event)
+            clip['events'] = sorted(events, key=lambda row: row['frame'])
     declared_rest_frame = by_name[rest_name]["start"] if rest_name is not None else rest_frame
     rest_frame = min(declared_rest_frame, frames - 1)
     result = {"name": model.name, "positions": positions, "texcoords": texcoords, "joints": joints,
