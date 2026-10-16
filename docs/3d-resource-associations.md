@@ -43,10 +43,10 @@ remain in private diagnostics. Pets retain their existing editor-eye policy.
 This does not implement the complete PonyBook UI or idle autoplay. The optional
 native interaction profile below supplies blink, click and dizzy data to ATP.
 
-The build excludes objects with the existing public `npc` tag from the 3D
-catalogue. It keeps their ordinary GameData entries and native discovery
-diagnostics. Names and other tags do not determine this exclusion. The 3D
-generation stage does not delete retained files; only current catalogue
+All public pony, pet and costume identities are eligible for 3D generation,
+including objects tagged `npc`. Tags and ordinary GameData entries are unchanged;
+each identity still passes the same native association and conversion checks.
+The 3D generation stage does not delete retained files; only current catalogue
 references are uploaded.
 
 ## Responsibilities

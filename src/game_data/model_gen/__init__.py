@@ -1,14 +1,16 @@
 """Generate the optional 3D catalogue inside the existing game-data build."""
+from collections.abc import Collection, Iterable
 import hashlib
 import json
 from pathlib import Path
 import tempfile
+from typing import TYPE_CHECKING
 from xml.etree import ElementTree as ET
 
 from ..model_associations import discover_associations, write_association_report
 from ..model_paths import asset_digest, is_asset_path, model_path
 from .converter import ConversionError
-from .converter.export import convert_native
+from .converter.export import AssetBundle, convert_native
 from .converter.native import NativeInputError, material_dependency_names
 from .selection import SelectionError, select_native_view
 from .interactions import InteractionError, prepare_interactions
@@ -16,7 +18,12 @@ from .native_emitter import load_native_emitter
 from .additional import prepare_additional_actor, attach_additional_actor
 
 
-def _render_override(campaign, category, identity):
+if TYPE_CHECKING:
+    from luna_kit.gameobjectdata import GameObjectData
+    from luna_kit.typings import DefaultGameCampaignType
+
+
+def _render_override(campaign: DefaultGameCampaignType, category: str, identity: str) -> bool:
     """Do not invent merge semantics for new visual campaign overrides."""
     data = campaign.get('game_object_data', {})
     if not isinstance(data, dict) or not isinstance(data.get(category, {}), dict):
@@ -28,7 +35,7 @@ def _render_override(campaign, category, identity):
               'Eyes', 'Sets', 'SubSets', 'Parts', 'ModelName', 'LinkedPart',
               'AdditionalObject', 'Conversation', 'IdleAnimation', 'AnimationIdle', 'Type',
               'AnimationWalk', 'AnimationRun', 'AnimationEditorIdle', 'Special_AI', 'UserVector'}
-    def visit(value):
+    def visit(value: object) -> bool:
         if isinstance(value, dict):
             return any(k in fields or k.endswith('AnimationList') or visit(v) for k,v in value.items())
         if isinstance(value, list):
@@ -37,7 +44,7 @@ def _render_override(campaign, category, identity):
     return visit(override)
 
 
-def _check_failed_materials(folder, model, failed_paths):
+def _check_failed_materials(folder: Path, model: dict, failed_paths: set[Path]) -> None:
     """A known extraction failure cannot use absent-RKM or suffix fallback."""
     for material in model['materials']:
         for name in material_dependency_names(material):
@@ -51,7 +58,7 @@ def _check_failed_materials(folder, model, failed_paths):
                 break
 
 
-def _publish_local(stage, dist, catalogue):
+def _publish_local(stage: Path, dist: Path, catalogue: dict) -> None:
     """Publish this namespace: models may be replaced before the catalogue."""
     owned = dist/'models/3d'
     if not owned.resolve().is_relative_to(dist.resolve()):
@@ -86,8 +93,10 @@ def _publish_local(stage, dist, catalogue):
     (stage/'models_3d.json').replace(catalogue_path)
 
 
-def generate_models(native_objects, extracted_dir, dist_dir, report_path, *, campaign,
-                    public_identities=None, display_profile='ponybook-preferred', failed_rkms=()):
+def generate_models(native_objects: GameObjectData, extracted_dir: str | Path, dist_dir: str | Path,
+                    report_path: str | Path, *, campaign: DefaultGameCampaignType,
+                    public_identities: Collection[str] | None = None,
+                    display_profile: str = 'ponybook-preferred', failed_rkms: Iterable[str] = ()) -> dict:
     """Discover and convert supported objects; all other objects get diagnostics.
 
     Normal callers pass Transformer inputs and public GameData IDs. There is no
@@ -167,7 +176,7 @@ def generate_models(native_objects, extracted_dir, dist_dir, report_path, *, cam
                     base_selection = selection
                     interaction_effects = {}
                     effect_provenance = {}
-                    def resolve_emitter(attributes, frame):
+                    def resolve_emitter(attributes: dict[str, str], frame: int) -> dict:
                         if set(attributes) != {'Particle'}:
                             raise ValueError('Unsupported native emitter attributes')
                         name = attributes['Particle']
@@ -193,7 +202,7 @@ def generate_models(native_objects, extracted_dir, dist_dir, report_path, *, cam
                     if used_effects:
                         selection['provenance']['interactions']['effects'] = {
                             name: effect_provenance[name] for name in used_effects}
-                    def convert_selected(selection, effects):
+                    def convert_selected(selection: dict, effects: dict[str, dict]) -> AssetBundle:
                         return convert_native(folder/model_name, folder/association['animation'],
                         folder/association['csv']['file'], selection['clip_names'], identity=identity,
                         model_filename=identity, animation_filenames=True,

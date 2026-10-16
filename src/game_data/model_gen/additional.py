@@ -7,7 +7,9 @@ See docs/3d-additional-actors.md for the source evidence and coordinate policy.
 """
 import json
 import math
+from pathlib import Path
 import struct
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -17,18 +19,23 @@ from .converter.csv import read_clips
 from .converter.native_animation import read_animation_header
 from .selection import SelectionError
 
+if TYPE_CHECKING:
+    from luna_kit.gameobjectdata import GameObject
+    from .converter.export import AssetBundle
+
 
 CONTROLLER = 'native-first-then-random-v1'
 CLIENT_VERSION = '11.4.3c'
 CLIENT_SHA256 = 'd4fc2e7650ae866735d4a9a1da4b900262bdcf188f1d34fb9c0ebe6b08609c29'
 
 
-def _require(condition, detail):
+def _require(condition: object, detail: str) -> None:
     if not condition:
         raise SelectionError('additional_actor_unverified', detail)
 
 
-def prepare_additional_actor(obj, owner_association, report, folder, cache):
+def prepare_additional_actor(obj: GameObject, owner_association: dict, report: dict, folder: Path,
+                             cache: dict[str, tuple[AssetBundle, dict]]) -> tuple[AssetBundle, dict] | None:
     """Validate the entire numeric-index child library before permitting it.
 
     Cache ownership is one generate_models call. An excluded owner never writes
@@ -73,7 +80,7 @@ def prepare_additional_actor(obj, owner_association, report, folder, cache):
     return cache[stem]
 
 
-def _native_rest_root(bundle, identity, root_name):
+def _native_rest_root(bundle: AssetBundle, identity: str, root_name: str | None) -> tuple[int, np.ndarray]:
     """Recover an exact native joint ordinal/global pose from our verified GLB.
 
     The serializer preserves native bone names and emits local joint transforms
@@ -108,12 +115,13 @@ def _native_rest_root(bundle, identity, root_name):
     return ordinal, local[ordinal, :3, 3]
 
 
-def _native_y(angle):
+def _native_y(angle: float) -> np.ndarray:
     c, s = math.cos(angle), math.sin(angle)
     return np.array([[c, 0., -s], [0., 1., 0.], [s, 0., c]])
 
 
-def attach_additional_actor(obj, owner_bundle, identity, prepared):
+def attach_additional_actor(obj: GameObject, owner_bundle: AssetBundle, identity: str,
+                            prepared: tuple[AssetBundle, dict]) -> tuple[dict, dict]:
     """Return the public child reference and private native placement evidence."""
     child_bundle, child_row = prepared
     declaration = obj['AdditionalObject']

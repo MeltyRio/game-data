@@ -4,26 +4,31 @@ Retained 11.4.2a ARM64 evidence covers ordered Sets, direct SubSets, three
 part slots, and one LinkedPart. It does not establish deeper nesting.
 No model, owner, part or mesh is inferred from a resource name.
 """
+from typing import TYPE_CHECKING, NoReturn
+
+if TYPE_CHECKING:
+    from luna_kit.gameobjectdata import GameObject, GameObjectData
+
 SLOTS = ('Body', 'Mane', 'Tail')
 
 
 class WardrobeError(ValueError):
-    def __init__(self, code, detail):
+    def __init__(self, code: str, detail: str) -> None:
         self.code = code
         super().__init__(detail)
 
 
-def _fail(code, detail):
+def _fail(code: str, detail: str) -> NoReturn:
     raise WardrobeError(code, detail)
 
 
-def _array(value, field):
+def _array(value: object, field: str) -> list[str]:
     if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
         _fail('invalid_wardrobe_declaration', field + ' must be a string array')
     return value
 
 
-def registered_sets(owner, sets):
+def registered_sets(owner: GameObject, sets: dict[str, GameObject]) -> list[str]:
     """Pony.Sets stops at its first empty item; each direct SubSets is retained.
 
     The native SubSets parser has no matching empty-item terminator. An empty
@@ -49,9 +54,9 @@ def registered_sets(owner, sets):
     return result
 
 
-def resolve_set_parts(outfit, parts):
+def resolve_set_parts(outfit: GameObject, parts: dict[str, GameObject]) -> tuple[dict[str, dict[str, str]], dict[str, dict[str, str]]]:
     """Resolve explicit Parts and exactly one LinkedPart, preserving slot types."""
-    def part(pid, slot=None, parent=None):
+    def part(pid: str, slot: str | None = None, parent: str | None = None) -> dict[str, str]:
         data = parts.get(pid, {}).get('PonyPart', {})
         actual, mesh = data.get('Type'), data.get('ModelName')
         if actual not in SLOTS or not isinstance(mesh, str) or not mesh:
@@ -90,7 +95,8 @@ def resolve_set_parts(outfit, parts):
     return direct, expanded
 
 
-def resolve_wardrobe(owner, game_objects, *, outfit_id=None):
+def resolve_wardrobe(owner: GameObject, game_objects: GameObjectData, *,
+                     outfit_id: str | None = None) -> dict | None:
     """Return slot choices and exact mesh controls, without reading RK files.
 
     A requested outfit starts from native default slots and applies its explicit

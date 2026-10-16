@@ -15,6 +15,9 @@ import struct
 from pathlib import Path
 from typing import Collection
 
+import numpy as np
+from numpy.typing import NDArray
+
 from .native_animation import read_animation, NATIVE_POSITION_SCALE
 
 LUNA_DEPENDENCY = "game-data uv.lock: luna-kit"
@@ -78,7 +81,7 @@ def _validate_model_layout(path: Path) -> None:
         if tag in sections or (count and (offset < 80 + 24 * 16 or offset + size > len(raw))):
             raise NativeInputError("Invalid RK section bounds or duplicate tag")
         sections[tag] = (offset, count, size)
-    def section(tag, stride=None):
+    def section(tag: int, stride: int | None = None) -> tuple[int, int, int]:
         item = sections.get(tag)
         if item is None or not item[1] or item[2] % item[1] or (stride and item[2] != item[1] * stride):
             raise NativeInputError(f"Unsupported RK section layout: {tag}")
@@ -113,7 +116,7 @@ def _validate_model_layout(path: Path) -> None:
         raise NativeInputError("Unsupported RK position/UV layout")
 
 
-def _rkm_fields(path):
+def _rkm_fields(path: Path) -> dict[str, str]:
     with path.open(newline="", encoding="utf-8-sig") as handle:
         rows = [row for row in csv.reader(handle, delimiter="=") if row]
     if any(len(row) != 2 for row in rows) or len({row[0] for row in rows}) != len(rows):
@@ -121,7 +124,7 @@ def _rkm_fields(path):
     return dict(rows)
 
 
-def _vector_x(fields, *, cpu):
+def _vector_x(fields: dict[str, str], *, cpu: bool) -> float:
     # The reviewed assets encode only the first scalar. Native prefix lookup
     # plus sscanf reads that x; other encodings need separate format evidence.
     keys = {key for key in fields if key.startswith("UserVector")}
@@ -136,7 +139,8 @@ def _vector_x(fields, *, cpu):
     return value
 
 
-def _hair_material(folder, fields, controller, first_material):
+def _hair_material(folder: Path, fields: dict[str, str], controller: dict[str, float] | None,
+                   first_material: str) -> tuple[dict, list[Path], str]:
     if not isinstance(controller, dict) or set(controller) != {"UserVectorSpeed", "RangeMin", "RangeMax"}:
         raise NativeInputError("Missing or unsupported native UserVector declaration")
     values = [controller[key] for key in ("UserVectorSpeed", "RangeMin", "RangeMax")]
@@ -158,7 +162,9 @@ def _hair_material(folder, fields, controller, first_material):
     return result, [first_path], first_path.name
 
 
-def _remove_collapsed_zero_weight_triangles(primitives, materials, weights):
+def _remove_collapsed_zero_weight_triangles(
+    primitives: list[dict], materials: list[dict], weights: np.ndarray,
+) -> tuple[list[dict], list[dict], dict | None]:
     """Omit only triangles proven to collapse to one point in native rkshader.
 
     Its four explicit weights accumulate from zero; the final homogeneous lane
@@ -204,7 +210,8 @@ def _csv_clips(path: Path, frame_count: int, required: set[str], frame_boundary:
         raise NativeInputError(str(error)) from error
 
 
-def _verify_event_source(event_path, events_absent: bool, names: set[str], event_approvals=None) -> tuple[dict, Path | None]:
+def _verify_event_source(event_path: str | Path | None, events_absent: bool, names: set[str],
+                         event_approvals: dict[str, list[str]] | None = None) -> tuple[dict, Path | None]:
     """Validate an explicit event source; absence must be asserted by discovery."""
     if bool(event_path) == bool(events_absent):
         raise NativeInputError("Supply an event XML or explicitly confirm its native source absence")
@@ -286,11 +293,11 @@ def load_native(
     rest_frame: int | None = None,
     event_path: str | Path | None = None,
     events_absent: bool = False,
-    user_vector: dict | None = None,
+    user_vector: dict[str, float] | None = None,
     frame_boundary: str = 'reject',
     additional_event_paths: Collection[str | Path] = (),
     retained_meshes: Collection[str] | None = None,
-    event_approvals: dict | None = None,
+    event_approvals: dict[str, list[str]] | None = None,
 ) -> dict:
     """Read native files without axis changes, retargeting, or visibility guesses.
 
@@ -463,7 +470,7 @@ def load_native(
                 texture_dependencies.append(alpha_path)
             else:
                 alpha_path = None
-            def decode_texture():
+            def decode_texture() -> tuple[bytes, int, int]:
                 if properties.NoCompress:
                     from PIL import Image
                     data = texture_path.read_bytes()
@@ -517,7 +524,7 @@ def load_native(
     primitives, materials, zero_weight_evidence = _remove_collapsed_zero_weight_triangles(
         primitives, materials, weights)
 
-    def transforms(start: int, end: int) -> dict:
+    def transforms(start: int, end: int) -> dict[str, NDArray[np.float64]]:
         if end >= frames:
             # CSV start/end remain untouched. Repeated output samples model
             # native sampling of the last real source frame, not invented data.

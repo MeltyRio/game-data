@@ -3,17 +3,18 @@ import io
 import json
 import struct
 import numpy as np
+from numpy.typing import ArrayLike
 from PIL import Image
-from .core import Model, Clip, require, local_trs, pose_matrices
+from .core import Model, Clip, Rig, require, local_trs, pose_matrices
 
 
 class GLB:
-    def __init__(self):
+    def __init__(self) -> None:
         self.document = {'asset': {'version': '2.0', 'generator': 'atp-model-converter/0.1.0.dev0'},
                          'buffers': [{'byteLength': 0}], 'bufferViews': [], 'accessors': []}
         self.binary = bytearray()
 
-    def view(self, payload, target=None):
+    def view(self, payload: bytes, target: int | None = None) -> int:
         self.binary.extend(b'\0' * (-len(self.binary) % 4))
         row = {'buffer': 0, 'byteOffset': len(self.binary), 'byteLength': len(payload)}
         if target is not None: row['target'] = target
@@ -21,7 +22,8 @@ class GLB:
         self.document['bufferViews'].append(row)
         return len(self.document['bufferViews']) - 1
 
-    def accessor(self, array, kind, component=5126, target=None, bounds=False):
+    def accessor(self, array: ArrayLike, kind: str, component: int = 5126,
+                 target: int | None = None, bounds: bool = False) -> int:
         dtype = {5126: '<f4', 5123: '<u2', 5125: '<u4'}[component]
         values = np.asarray(array, dtype=dtype)
         require(len(values) > 0 and np.isfinite(values).all(), 'Empty/non-finite accessor')
@@ -33,7 +35,7 @@ class GLB:
         self.document['accessors'].append(row)
         return len(self.document['accessors']) - 1
 
-    def finish(self):
+    def finish(self) -> bytes:
         self.document['buffers'][0]['byteLength'] = len(self.binary)
         text = json.dumps(self.document, separators=(',', ':'), allow_nan=False).encode()
         text += b' ' * (-len(text) % 4)
@@ -42,7 +44,7 @@ class GLB:
         return struct.pack('<4sII', b'glTF', 2, length) + struct.pack('<I4s', len(text), b'JSON') + text + struct.pack('<I4s', len(binary), b'BIN\0') + binary
 
 
-def rig_nodes(g, rig, rest=None, scale=1.0):
+def rig_nodes(g: GLB, rig: Rig, rest: ArrayLike | None = None, scale: float = 1.0) -> list[dict]:
     require(len(rig.parents) == len(rig.names) > 0, 'Invalid rig')
     # Native upright is -Y. A proper rotation (not reflection) makes the GLB
     # itself Y-up, including in ordinary glTF viewers; no viewer-side flip.

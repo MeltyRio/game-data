@@ -19,12 +19,12 @@ from .converter.native import NativeInputError, _sibling
 DIZZY_EMITTER = 'mlp_arena_pony_defeat_02'
 
 
-def _check(condition, message):
+def _check(condition: bool, message: str) -> None:
     if not condition:
         raise NativeInputError(message)
 
 
-def _node(node, tag, fields):
+def _node(node: ET.Element | None, tag: str, fields: list[str]) -> list[float]:
     _check(node is not None and node.tag == tag and not len(node)
            and set(node.attrib) == set(fields), 'Unsupported native emitter ' + tag)
     try:
@@ -36,7 +36,7 @@ def _node(node, tag, fields):
     return values
 
 
-def parse_dizzy_particle(raw):
+def parse_dizzy_particle(raw: bytes) -> tuple[str, dict]:
     """Retain native numeric values; reject layouts not verified by this player."""
     try:
         root = ET.fromstring(raw)
@@ -93,7 +93,7 @@ def parse_dizzy_particle(raw):
     return material, result
 
 
-def _read_native_emitter(folder, name):
+def _read_native_emitter(folder: str | Path, name: str) -> tuple[dict, bytes, dict[str, str]]:
     """Return (JSON profile without texture index, PNG bytes, private sources)."""
     from PIL import Image
     from luna_kit.model.rk import parse_rkm
@@ -138,7 +138,7 @@ def _read_native_emitter(folder, name):
     return profile, output.getvalue(), provenance
 
 
-def load_native_emitter(folder, name):
+def load_native_emitter(folder: str | Path, name: str) -> tuple[dict, bytes, dict[str, str]]:
     """Treat a failed optional effect closure as unsupported, never as no event."""
     try:
         return _read_native_emitter(folder, name)

@@ -68,7 +68,7 @@ class Pipeline(unittest.TestCase):
         self.globals['get_s3_client'].assert_not_called()
 
 
-    def test_existing_npc_tags_filter_models_without_changing_page_data(self):
+    def test_npc_tags_allow_models_without_changing_page_data(self):
         for name in ('pony', 'pet', 'costume'):
             objects = getattr(self.game_data.game_objects, name).objects
             objects[name+'_npc'] = SimpleNamespace(tags=['quest', 'npc'])
@@ -76,7 +76,8 @@ class Pipeline(unittest.TestCase):
         self.game_data.game_objects.pony.objects['Pony_NPC_Like_Name'] = SimpleNamespace(tags=[])
         before = deepcopy(self.game_data)
         expected = {'Pony_NPC_Like_Name', 'pony_id', 'pet_id', 'costume_id',
-                    'pony_other_tags', 'pet_other_tags', 'costume_other_tags'}
+                    'pony_other_tags', 'pet_other_tags', 'costume_other_tags',
+                    'pony_npc', 'pet_npc', 'costume_npc'}
         for skip in (['download', 'extract'], ['download', 'extract', 'transform']):
             with self.subTest(skip=skip):
                 self.writer.reset_mock()

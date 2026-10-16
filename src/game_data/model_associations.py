@@ -5,18 +5,23 @@ not a converter or a claim that an extracted folder is a complete game release.
 The report belongs in raw/, never in the public dist/ or models_3d.json.
 """
 from collections import Counter
+from collections.abc import Callable
 import hashlib
 import json
 import struct
 from pathlib import Path
 import tempfile
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from luna_kit.gameobjectdata import GameObject, GameObjectData
 
 
 class AssociationError(ValueError):
     pass
 
 
-def _stem(value):
+def _stem(value: object) -> str:
     # The inspected native fields contain flat resource stems. A changed source
     # must be reviewed rather than flattened, case-folded or searched by prefix.
     if (not isinstance(value, str) or not value or value in {'.', '..'}
@@ -25,7 +30,7 @@ def _stem(value):
     return value
 
 
-def _file(folder, name):
+def _file(folder: Path, name: str) -> Path:
     _stem(name)
     path = folder / name
     if not path.is_file():
@@ -39,12 +44,12 @@ def _file(folder, name):
     return path
 
 
-def _sha(path):
+def _sha(path: Path) -> str:
     with path.open('rb') as stream:
         return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 
-def _model(path):
+def _model(path: Path) -> dict:
     from luna_kit.model import RKModel
     from .model_gen.converter.native import _validate_model_layout
     # Luna assumes required sections exist; reject unsupported layouts per resource.
@@ -61,7 +66,7 @@ def _model(path):
             'materials': [material.name for material in model.materials]}
 
 
-def _animation(path):
+def _animation(path: Path) -> dict:
     # Reuse Luna's header schema, without invoking its fixed type-4 frame
     # decoder on type-0/type-1 records. Frame conversion remains a separate gate.
     import dataclasses_struct as dcs
@@ -85,7 +90,7 @@ def _animation(path):
             'frame_type': header.frame_type, 'embedded_name': name}
 
 
-def _clips(path, frame_count):
+def _clips(path: Path, frame_count: int) -> dict:
     # Resolve the explicit native library's CSV before validating its rows.
     from .model_gen.converter.csv import CsvError, read_clips
     try:
@@ -99,7 +104,7 @@ def _clips(path, frame_count):
         raise AssociationError(str(error)) from error
 
 
-def _sets(pony, sets):
+def _sets(pony: GameObject, sets: dict[str, GameObject]) -> list[str]:
     from .model_gen.wardrobe import WardrobeError, registered_sets
     try:
         return registered_sets(pony, sets)
@@ -107,7 +112,7 @@ def _sets(pony, sets):
         raise AssociationError(str(error)) from error
 
 
-def _parts(outfit, parts):
+def _parts(outfit: GameObject, parts: dict[str, GameObject]) -> dict[str, dict[str, str]]:
     from .model_gen.wardrobe import WardrobeError, resolve_set_parts
     try:
         return resolve_set_parts(outfit, parts)[1]
@@ -115,7 +120,7 @@ def _parts(outfit, parts):
         raise AssociationError(str(error)) from error
 
 
-def discover_associations(game_objects, extracted_dir):
+def discover_associations(game_objects: GameObjectData, extracted_dir: str | Path) -> dict:
     """Return traceable declarations and blockers; never mark a GLB successful.
 
     Paths are resolved only from explicit fields. Bone count is a rejection
@@ -135,7 +140,7 @@ def discover_associations(game_objects, extracted_dir):
         except AssociationError as error:
             set_errors[identity] = str(error)
 
-    def inspect(name, cache, reader):
+    def inspect(name: str, cache: dict[str, dict], reader: Callable[[Path], dict]) -> dict:
         if name not in cache:
             try:
                 path = _file(folder, name)
@@ -146,7 +151,7 @@ def discover_associations(game_objects, extracted_dir):
             raise AssociationError(cache[name]['error'])
         return cache[name]
 
-    def inspect_csv(stem, library):
+    def inspect_csv(stem: str, library: dict) -> dict:
         key = (stem + '.csv', library['frame_count'])
         if key not in csv_cache:
             try:
@@ -157,7 +162,7 @@ def discover_associations(game_objects, extracted_dir):
                 csv_cache[key] = {'file': key[0], 'error': str(error)}
         return csv_cache[key]
 
-    def additional_actor(declaration):
+    def additional_actor(declaration: dict) -> dict:
         # The retained native create path uses AdditionalObject.Model for both
         # model and library. Animation is retained as source data only: current
         # declarations contain both clip names and non-clip labels in that field.
@@ -300,7 +305,8 @@ def discover_associations(game_objects, extracted_dir):
             'csv_libraries': {name: data for (name, _frames), data in csv_cache.items()}, 'identities': rows}
 
 
-def write_association_report(game_objects, extracted_dir, output, *, public_dir, report=None):
+def write_association_report(game_objects: GameObjectData, extracted_dir: str | Path, output: str | Path, *,
+                             public_dir: str | Path, report: dict | None = None) -> dict:
     """Atomically write a local audit, refusing paths inside public dist/."""
     folder, output = Path(extracted_dir), Path(output)
     if output.resolve().is_relative_to(Path(public_dir).resolve()):

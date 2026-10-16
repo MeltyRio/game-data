@@ -43,7 +43,7 @@ def build_cdn(
     skip: list[str] | None = None,
     ffdec: str = 'ffdec',
     force: bool = False,
-):
+) -> bool | None:
     BUCKET = os.environ.get('S3_BUCKET')
     PRIVATE_BUCKET = os.environ.get('PRIVATE_S3_BUCKET')
 
@@ -246,8 +246,7 @@ def build_cdn(
             public_identities = {
                 identity
                 for name in ('pony', 'pet', 'costume')
-                for identity, obj in getattr(game_data.game_objects, name).objects.items()
-                if 'npc' not in obj.tags
+                for identity in getattr(game_data.game_objects, name).objects
             }
             report = generate_models(
                 native_objects, extracted_dir, dist_dir, raw_dir/'model-associations.json',

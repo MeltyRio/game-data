@@ -4,10 +4,12 @@ Column vectors in native coordinates (head toward negative Y). Global poses
 become local TRS; the GLB skeleton root applies Rx(pi) to glTF Y-up. No archive,
 webpage, save, or PonyVista dependencies.
 """
+from collections.abc import Sequence
 from dataclasses import dataclass
 import hashlib
 import json
 import numpy as np
+from numpy.typing import ArrayLike, NDArray
 
 
 class ConversionError(ValueError):
@@ -56,7 +58,7 @@ class Clip:
     events: list[dict] | None = None
 
 
-def rig_from_native(native):
+def rig_from_native(native: dict) -> Rig:
     parents = [bone['parent'] for bone in native['bones']]
     anim_source = native.get('provenance', {}).get('animation_sha256')
     require(isinstance(anim_source, str) and len(anim_source) == 64
@@ -69,7 +71,7 @@ def rig_from_native(native):
     return Rig(key, parents, names)
 
 
-def pose_matrices(translations, rotations):
+def pose_matrices(translations: ArrayLike, rotations: ArrayLike) -> NDArray[np.float64]:
     t, q = np.asarray(translations, dtype=float), np.asarray(rotations, dtype=float)
     require(t.shape[:-1] == q.shape[:-1] and t.shape[-1] == 3 and q.shape[-1] == 4, 'Invalid pose shape')
     require(np.isfinite(t).all() and np.isfinite(q).all(), 'Non-finite pose')
@@ -84,7 +86,7 @@ def pose_matrices(translations, rotations):
     return m
 
 
-def local_trs(globals_, parents):
+def local_trs(globals_: ArrayLike, parents: Sequence[int]) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
     values = np.asarray(globals_, dtype=float)
     require(values.shape[-3:] == (len(parents), 4, 4), 'Pose/bone layout mismatch')
     require(np.isfinite(values).all(), 'Non-finite pose matrix')
@@ -114,7 +116,7 @@ def local_trs(globals_, parents):
     return t, q
 
 
-def clip_from_native(row, rig):
+def clip_from_native(row: dict, rig: Rig) -> Clip:
     """Convert the declared global native poses to the model's exact rig."""
     frames = pose_matrices(row['translations'], row['rotations_xyzw'])
     require(frames.shape[-3] == len(rig.parents), 'Native clip/bone count mismatch')
@@ -122,7 +124,7 @@ def clip_from_native(row, rig):
                 np.asarray(row['translations']), np.asarray(row['rotations_xyzw']))
 
 
-def from_native(native, *, identity, scale=1.0):
+def from_native(native: dict, *, identity: str, scale: float = 1.0) -> tuple[Model, list[Clip]]:
     for primitive in native['primitives']:
         indices = np.asarray(primitive['indices'])
         require(indices.ndim == 2 and indices.shape[1] == 3 and len(indices) > 0

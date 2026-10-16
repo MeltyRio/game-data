@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import struct
 import numpy as np
+from numpy.typing import NDArray
 
 NATIVE_POSITION_SCALE = 0.031250953674316406
 HEADER = struct.Struct('<8sII64sIII')
@@ -27,8 +28,8 @@ class AnimationHeader:
 @dataclass(frozen=True)
 class NativeAnimation:
     header: AnimationHeader
-    translations: np.ndarray
-    rotations_xyzw: np.ndarray
+    translations: NDArray[np.float64]
+    rotations_xyzw: NDArray[np.float64]
 
 
 def read_animation_header(path: str | Path) -> AnimationHeader:

@@ -6,30 +6,34 @@ The first declared idle is a documented viewer policy. With no declaration,
 the reviewed native RK loader selects its own initial static pose.
 """
 from pathlib import Path
+from typing import TYPE_CHECKING, NoReturn
 import hashlib
 import re
 from xml.etree import ElementTree as ET
 
 from .wardrobe import WardrobeError, resolve_wardrobe
 
+if TYPE_CHECKING:
+    from luna_kit.gameobjectdata import GameObject, GameObjectData
+
 
 class SelectionError(ValueError):
-    def __init__(self, code, detail):
+    def __init__(self, code: str, detail: str) -> None:
         self.code = code
         super().__init__(detail)
 
 
-def _fail(code, detail):
+def _fail(code: str, detail: str) -> NoReturn:
     raise SelectionError(code, detail)
 
 
-def _strings(value, field):
+def _strings(value: object, field: str) -> list[str]:
     if not isinstance(value, list) or any(not isinstance(v, str) for v in value):
         _fail('invalid_declaration', field + ' must be a string array')
     return [v for v in value if v]
 
 
-def _event_file(folder, stem, *, allow_missing=False):
+def _event_file(folder: Path, stem: str, *, allow_missing: bool = False) -> Path | None:
     if (not isinstance(stem, str) or not stem or stem in {'.', '..'}
             or any(c in stem for c in '/\\\0') or any(ord(c) < 32 for c in stem)):
         _fail('invalid_event_source', 'Unsafe or missing event resource stem')
@@ -50,7 +54,7 @@ def _event_file(folder, stem, *, allow_missing=False):
     return path
 
 
-def _events(path, model_stem, mesh_names):
+def _events(path: Path, model_stem: str, mesh_names: set[str]) -> tuple[dict[str, bool], set[str], str, list[str]]:
     raw = path.read_bytes()
     try:
         text = raw.decode('utf-8-sig')
@@ -105,7 +109,8 @@ def _events(path, model_stem, mesh_names):
     return defaults, eventful, hashlib.sha256(raw).hexdigest(), sorted(absent_hidden)
 
 
-def _eyes(obj, game_objects, mesh_names, *, allow_single_mesh_noop=False):
+def _eyes(obj: GameObject, game_objects: GameObjectData, mesh_names: set[str], *,
+          allow_single_mesh_noop: bool = False) -> tuple[set[str], set[str], dict]:
     data = obj.get('Eyes')
     source = 'Eyes'
     known_fields = {'EyeSubObject_' + state for state in ('Open', 'Closed', 'Happy', 'Frown')}
@@ -170,7 +175,11 @@ def _eyes(obj, game_objects, mesh_names, *, allow_single_mesh_noop=False):
     return opened, controlled, provenance
 
 
-def _select_world_view(category, obj, game_objects, *, model_stem, mesh_names, clips, extracted_dir, outfit_id=None, csv_first_name=None, csv_excluded_names=None, allow_additional_actor=False):
+def _select_world_view(category: str, obj: GameObject, game_objects: GameObjectData, *,
+                       model_stem: str, mesh_names: list[str], clips: list[dict],
+                       extracted_dir: str | Path, outfit_id: str | None = None,
+                       csv_first_name: str | None = None, csv_excluded_names: list[str] | None = None,
+                       allow_additional_actor: bool = False) -> dict:
     """Return explicit visible meshes, rest, and event-free declared clip names.
 
     `clips` is the already validated ordered CSV list of name/start/end/fps.
@@ -186,7 +195,7 @@ def _select_world_view(category, obj, game_objects, *, model_stem, mesh_names, c
     if not isinstance(mesh_names, list) or not mesh_names or any(not isinstance(n, str) or not n for n in mesh_names):
         _fail('invalid_mesh_names', 'Expected nonempty RK mesh names')
     declared, sources = [], {}
-    def add(name, field):
+    def add(name: str | None, field: str) -> None:
         if name:
             if not isinstance(name, str):
                 _fail('invalid_declaration', 'Animation name is not a string: ' + field)
@@ -360,8 +369,10 @@ def _select_world_view(category, obj, game_objects, *, model_stem, mesh_names, c
             'provenance': provenance, 'excluded_clips': excluded}
 
 
-def _ponybook_view(world, *, obj, game_objects, model_stem, mesh_names, clips,
-                   extracted_dir, outfit_id, csv_first_name, csv_excluded_names, **unused):
+def _ponybook_view(world: dict, *, obj: GameObject, game_objects: GameObjectData,
+                   model_stem: str, mesh_names: list[str], clips: list[dict],
+                   extracted_dir: str | Path, outfit_id: str | None, csv_first_name: str | None,
+                   csv_excluded_names: list[str] | None, **unused: object) -> dict:
     """Compile a public default appearance, retaining verified town actions.
 
     No player equipment or alternate owner is inferred. Display the first frame
@@ -413,7 +424,7 @@ def _ponybook_view(world, *, obj, game_objects, model_stem, mesh_names, clips,
     if (not isinstance(rejected, list) or any(not isinstance(n, str) for n in rejected)
             or requested in rejected):
         _fail('ponybook_idle_unverified', 'PonyBook idle requires a complete, non-rejected CSV declaration')
-    def resolve(name):
+    def resolve(name: str) -> tuple[str, str]:
         if name in rejected:
             _fail('ponybook_idle_unverified', 'Rejected native pose/idle cannot use a name-miss fallback: ' + name)
         if name in valid:
@@ -468,10 +479,11 @@ def _ponybook_view(world, *, obj, game_objects, model_stem, mesh_names, clips,
             'provenance': provenance, 'excluded_clips': excluded}
 
 
-def select_native_view(category, obj, game_objects, *, model_stem, mesh_names, clips,
-                       extracted_dir, outfit_id=None, csv_first_name=None,
-                       csv_excluded_names=None, allow_additional_actor=False,
-                       display_profile='world-preview'):
+def select_native_view(category: str, obj: GameObject, game_objects: GameObjectData, *,
+                       model_stem: str, mesh_names: list[str], clips: list[dict],
+                       extracted_dir: str | Path, outfit_id: str | None = None,
+                       csv_first_name: str | None = None, csv_excluded_names: list[str] | None = None,
+                       allow_additional_actor: bool = False, display_profile: str = 'world-preview') -> dict:
     """Prefer a verified PonyBook appearance without discarding a valid world view.
 
     Explicit world-preview preserves the original API. ponybook-default is

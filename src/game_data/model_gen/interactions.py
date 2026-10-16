@@ -4,9 +4,15 @@ The controller constants mirror the reviewed native PonyBook branches. Clip
 availability alone never establishes a model/library association. That remains
 owned by discovery; this stage only uses that association's validated CSV.
 """
+from collections.abc import Callable
 import hashlib
+from pathlib import Path
 import re
+from typing import TYPE_CHECKING
 from xml.etree import ElementTree as ET
+
+if TYPE_CHECKING:
+    from luna_kit.gameobjectdata import GameObject
 
 STATES = ('Open', 'Closed', 'Happy', 'Frown')
 DEFAULT_TAPS = {
@@ -25,7 +31,7 @@ class InteractionError(ValueError):
     pass
 
 
-def native_click_names(obj):
+def native_click_names(obj: GameObject) -> list[str]:
     """Native allowed branches, not the game's remote-service random gate."""
     conversation = obj.get('Conversation')
     if conversation is not None:
@@ -39,7 +45,7 @@ def native_click_names(obj):
     return sorted(set(DEFAULT_TAPS.get(ai, ('gen_snap_01',))) | set(RANDOM_TAPS.get(ai, RANDOM_GENERIC)))
 
 
-def read_events(path):
+def read_events(path: Path) -> dict:
     """Read exact native records, retaining unknown events for diagnostics."""
     raw = path.read_bytes()
     text = raw.decode('utf-8-sig')
@@ -86,7 +92,9 @@ def read_events(path):
     return {'sha256': hashlib.sha256(raw).hexdigest(), 'animations': result, 'controls': controls}
 
 
-def prepare_interactions(selection, category, obj, *, model_stem, mesh_names, clips, effect_resolver=None):
+def prepare_interactions(selection: dict, category: str, obj: GameObject, *,
+                         model_stem: str, mesh_names: list[str], clips: list[dict],
+                         effect_resolver: Callable[[dict[str, str], int], dict] | None = None) -> dict:
     """Extend a verified static scene without guessing at missing controls.
 
     Unsupported individual actions retain explicit exclusions. Parsing failures

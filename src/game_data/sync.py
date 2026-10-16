@@ -7,7 +7,7 @@ import mimetypes
 import os
 from pathlib import Path
 import re
-from typing import Literal, TYPE_CHECKING, TypedDict
+from typing import Literal, NoReturn, TYPE_CHECKING, TypedDict
 
 from PIL import Image
 import botocore.exceptions
@@ -51,7 +51,7 @@ def upload_file(
     cache_control: str | None = None,
     *,
     strict: bool = False,
-):
+) -> str:
     metadata = {}
 
     extra_args = {}
@@ -151,7 +151,14 @@ def upload_single_file(
     )
 
 
-def prepare_model_upload(dist_folder: Path):
+class ModelUploadAsset(TypedDict):
+    sha256: str
+    bytes: int
+    rigKey: str
+    cache_control: str
+
+
+def prepare_model_upload(dist_folder: Path) -> tuple[bytes | None, dict[str, ModelUploadAsset]]:
     """Validate the local 3D reference closure before making any cloud calls.
 
     Historical content-addressed GLBs can stay in the owned namespace. They
@@ -172,14 +179,14 @@ def prepare_model_upload(dist_folder: Path):
         if not is_asset_path(path.relative_to(dist_folder).as_posix()):
             raise ValueError('Unexpected file in the owned 3D namespace')
     data = catalogue_path.read_bytes()
-    def invalid_constant(value):
+    def invalid_constant(value: str) -> NoReturn:
         raise ValueError('Non-finite value in 3D catalogue: ' + value)
     catalogue = json.loads(data, parse_constant=invalid_constant)
     if (not isinstance(catalogue, dict) or type(catalogue.get('schemaVersion')) is not int
             or catalogue['schemaVersion'] not in (1, 2, 3) or not isinstance(catalogue.get('models'), dict)):
         raise ValueError('Unsupported 3D catalogue')
-    assets = {}
-    def asset(ref, name=None, *, fixed_model=False):
+    assets: dict[str, ModelUploadAsset] = {}
+    def asset(ref: object, name: str | None = None, *, fixed_model: bool = False) -> None:
         if not isinstance(ref, dict):
             raise ValueError('Invalid 3D asset reference')
         digest, rig, size = ref.get('sha256'), ref.get('rigKey'), ref.get('bytes')
@@ -189,7 +196,7 @@ def prepare_model_upload(dist_folder: Path):
                 or not asset_path_matches(ref.get('path'), digest, name, fixed_model=fixed_model)):
             raise ValueError('Invalid 3D asset identity, size or path')
         key = ref['path']
-        value = {'sha256': digest, 'bytes': size, 'rigKey': rig,
+        value: ModelUploadAsset = {'sha256': digest, 'bytes': size, 'rigKey': rig,
                  'cache_control': 'no-cache' if fixed_model and safe_asset_name(name) and key == model_path(name)
                                   else 'max-age=2592000'}
         if key in assets and assets[key] != value:
@@ -203,7 +210,7 @@ def prepare_model_upload(dist_folder: Path):
             if path.stat().st_size != size or actual != digest:
                 raise ValueError('3D dependency size or digest mismatch: ' + key)
             assets[key] = value
-    def actor(model, *, identity=None, require_playable=False):
+    def actor(model: dict, *, identity: str | None = None, require_playable: bool = False) -> None:
         asset(model, identity, fixed_model=identity is not None)
         animations = model.get('animations')
         if not isinstance(animations, list) or (require_playable and not animations):
@@ -230,7 +237,7 @@ def prepare_model_upload(dist_folder: Path):
                     or ('dizzyAnimation' in profile and profile['dizzyAnimation'] not in ids)):
                 raise ValueError('Invalid native interaction catalogue profile')
 
-    def additional_actor(child):
+    def additional_actor(child: object) -> None:
         if (not isinstance(child, dict) or 'additionalActor' in child
                 or child.get('controller') != 'native-first-then-random-v1'
                 or type(child.get('parentRoot')) is not int
@@ -272,7 +279,7 @@ def prepare_model_upload(dist_folder: Path):
     return data, assets
 
 
-def upload_model_asset(client, bucket, dist_folder, key, ref):
+def upload_model_asset(client: 'S3Client', bucket: str, dist_folder: Path, key: str, ref: ModelUploadAsset) -> str:
     # Check the actual uploaded bytes too, not just the earlier preflight read.
     path = dist_folder/key
     model_dir = (dist_folder/'models/3d').resolve()
@@ -285,7 +292,7 @@ def upload_model_asset(client, bucket, dist_folder, key, ref):
                        cache_control=ref['cache_control'], strict=True)
 
 
-def sync(dist_folder: str | Path, bucket: str):
+def sync(dist_folder: str | Path, bucket: str) -> None:
     dist_folder = Path(dist_folder)
     model_catalogue, model_assets = prepare_model_upload(dist_folder)
     generate_diff(dist_folder, bucket)

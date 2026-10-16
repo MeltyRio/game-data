@@ -1,6 +1,8 @@
 """Convert resolved native inputs to an in-memory model and animation bundle."""
+from collections.abc import Collection
 from dataclasses import dataclass
 import hashlib
+from pathlib import Path
 
 from . import from_native, model_glb, animation_glb
 from .native import NativeInputError, load_native
@@ -14,12 +16,17 @@ class AssetBundle:
     provenance: dict | None = None
 
 
-def convert_native(rk_path, anim_path, csv_path, selected_names, *, identity,
-                   visible_meshes, rest_name=None, rest_frame=None,
-                   event_path=None, events_absent=False, user_vector=None, frame_boundary='reject', additional_event_paths=(),
-                   model_filename=None, animation_filenames=False,
-                   retained_meshes=None, interactions=None, model_interactions=None,
-                   animation_events=None, event_approvals=None, interaction_effects=None) -> AssetBundle:
+def convert_native(rk_path: str | Path, anim_path: str | Path, csv_path: str | Path,
+                   selected_names: Collection[str], *, identity: str,
+                   visible_meshes: Collection[str], rest_name: str | None = None,
+                   rest_frame: int | None = None, event_path: str | Path | None = None,
+                   events_absent: bool = False, user_vector: dict[str, float] | None = None,
+                   frame_boundary: str = 'reject', additional_event_paths: Collection[str | Path] = (),
+                   model_filename: str | None = None, animation_filenames: bool = False,
+                   retained_meshes: Collection[str] | None = None, interactions: dict | None = None,
+                   model_interactions: dict | None = None, animation_events: dict[str, list[dict]] | None = None,
+                   event_approvals: dict[str, list[str]] | None = None,
+                   interaction_effects: dict[str, dict] | None = None) -> AssetBundle:
     """Convert one explicit source association; all texture data stays in GLB.
 
     Mesh, rest and event-source arguments have the same meaning as in
@@ -81,7 +88,7 @@ def convert_native(rk_path, anim_path, csv_path, selected_names, *, identity,
         raise NativeInputError('Native events require the explicit interaction profile')
     files = {}
 
-    def asset(data, name=None, *, fixed_model=False):
+    def asset(data: bytes, name: str | None = None, *, fixed_model: bool = False) -> dict:
         if name is not None and not safe_asset_name(name):
             raise NativeInputError("Unsupported native animation filename: " + str(name))
         digest = hashlib.sha256(data).hexdigest()
