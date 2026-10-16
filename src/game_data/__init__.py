@@ -28,6 +28,7 @@ from .env import GAME_DATA_ENV_VAR, is_dev, load_env, set_mode
 from .extractor import extract
 from .image_gen import generate_images
 from .model_gen import generate_models
+from .model_gen.converter.animation_cache import AnimationCache
 from .notify import Notifier
 from .s3 import DEFAULT_BUCKET, get_s3_client
 from .sync import sync, upload_file
@@ -67,6 +68,7 @@ def build_cdn(
 
     success: bool = True
     failed_rkms = set()
+    model_cache = None
 
     aes_key: bytes | None = None
 
@@ -248,10 +250,13 @@ def build_cdn(
                 for name in ('pony', 'pet', 'costume')
                 for identity in getattr(game_data.game_objects, name).objects
             }
+            model_cache = AnimationCache(raw_dir/'model-cache/animations')
+            if s3_client and BUCKET:
+                model_cache.load_remote(s3_client, BUCKET)
             report = generate_models(
                 native_objects, extracted_dir, dist_dir, raw_dir/'model-associations.json',
                 campaign=campaign, public_identities=public_identities,
-                failed_rkms=failed_rkms,
+                failed_rkms=failed_rkms, animation_cache=model_cache,
             )
             console.print(report['summary'])
 
@@ -264,7 +269,11 @@ def build_cdn(
             sync(
                 dist_folder = dist_dir,
                 bucket = BUCKET,
+                repair_model_assets = model_cache.invalid_remote_assets if model_cache is not None else None,
             )
+
+            if model_cache is not None:
+                model_cache.publish_remote(dist_dir/'models_3d.json')
 
             s3_client.copy_object(
                 Bucket = BUCKET,

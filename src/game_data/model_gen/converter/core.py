@@ -124,7 +124,7 @@ def clip_from_native(row: dict, rig: Rig) -> Clip:
                 np.asarray(row['translations']), np.asarray(row['rotations_xyzw']))
 
 
-def from_native(native: dict, *, identity: str, scale: float = 1.0) -> tuple[Model, list[Clip]]:
+def from_native(native: dict, *, identity: str, scale: float = 1.0, include_clips: bool = True) -> tuple[Model, list[Clip]]:
     for primitive in native['primitives']:
         indices = np.asarray(primitive['indices'])
         require(indices.ndim == 2 and indices.shape[1] == 3 and len(indices) > 0
@@ -149,5 +149,5 @@ def from_native(native: dict, *, identity: str, scale: float = 1.0) -> tuple[Mod
     primitives = [{**p, 'indices': np.array([[remap[int(v)] for v in tri] for tri in p['indices']])} for p in native['primitives']]
     model = Model(identity, rig, positions, np.asarray(native['texcoords'])[used], joints, weights, bind, rest,
                   primitives, native['materials'], scale)
-    clips = [clip_from_native(row, rig) for row in native['clips']]
+    clips = [clip_from_native(row, rig) for row in native['clips']] if include_clips else []
     return model, clips

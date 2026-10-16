@@ -5,14 +5,20 @@ import json
 from pathlib import Path
 import tempfile
 from typing import TYPE_CHECKING
+from time import perf_counter
+from rich.progress import Progress, TimeElapsedColumn, TaskProgressColumn, TextColumn
+from ..console import console, COLUMNS
+from .converter.animation_cache import AnimationCache
+from .converter.texture_cache import TextureCache
 from xml.etree import ElementTree as ET
 
 from ..model_associations import discover_associations, write_association_report
+from ..model_catalogue import compact_animations
 from ..model_paths import asset_digest, is_asset_path, model_path
 from .converter import ConversionError
 from .converter.export import AssetBundle, convert_native
 from .converter.native import NativeInputError, material_dependency_names
-from .selection import SelectionError, select_native_view
+from .selection import SelectionError, index_event_files, select_native_view
 from .interactions import InteractionError, prepare_interactions
 from .native_emitter import load_native_emitter
 from .additional import prepare_additional_actor, attach_additional_actor
@@ -96,7 +102,9 @@ def _publish_local(stage: Path, dist: Path, catalogue: dict) -> None:
 def generate_models(native_objects: GameObjectData, extracted_dir: str | Path, dist_dir: str | Path,
                     report_path: str | Path, *, campaign: DefaultGameCampaignType,
                     public_identities: Collection[str] | None = None,
-                    display_profile: str = 'ponybook-preferred', failed_rkms: Iterable[str] = ()) -> dict:
+                    display_profile: str = 'ponybook-preferred', failed_rkms: Iterable[str] = (),
+                    animation_cache: AnimationCache | None = None,
+                    cache_dir: str | Path | None = None, texture_cache_bytes: int = 512 * 1024**2) -> dict:
     """Discover and convert supported objects; all other objects get diagnostics.
 
     Normal callers pass Transformer inputs and public GameData IDs. There is no
@@ -109,7 +117,17 @@ def generate_models(native_objects: GameObjectData, extracted_dir: str | Path, d
     failed_paths = {(folder/name).resolve() for name in failed_rkms}
     if report_path.resolve().is_relative_to(dist.resolve()):
         raise ValueError('Private 3D report must stay outside public dist')
-    report = discover_associations(native_objects, folder)
+    cache_dir = Path(cache_dir) if cache_dir is not None else report_path.parent/'model-cache'
+    if cache_dir.resolve().is_relative_to(dist.resolve()):
+        raise ValueError('Model cache must stay outside public dist')
+    animation_cache = animation_cache or AnimationCache(cache_dir/'animations')
+    if animation_cache.directory.resolve().is_relative_to(dist.resolve()):
+        raise ValueError('Animation cache must stay outside public dist')
+    texture_cache = TextureCache(cache_dir/'textures', max_bytes=texture_cache_bytes)
+    started = perf_counter()
+    with console.status('Discovering native 3D associations...'):
+        report = discover_associations(native_objects, folder)
+    discovery_seconds = perf_counter() - started
     report['purpose'] = 'native-association-and-generation'
     report['summary']['discovery_blockers'] = report['summary'].pop('blockers')
     report['conversion_enabled'] = True
@@ -120,8 +138,9 @@ def generate_models(native_objects: GameObjectData, extracted_dir: str | Path, d
                             'failed_rkm_extractions': sorted(failed_rkms),
                             'coverage': 'partial; only validated basic scenes'}
     catalogue = {'schemaVersion': 1, 'models': {}}
-    referenced = set()
+    referenced = {}
     additional_cache = {}
+    event_files = index_event_files(folder)
     eligible = len(report['identities']) if public_identities is None else len(public_identities)
     if public_identities is not None:
         for identity in sorted(set(public_identities) - report['identities'].keys()):
@@ -130,13 +149,16 @@ def generate_models(native_objects: GameObjectData, extracted_dir: str | Path, d
                 'reason': 'Public GameData identity is absent from the current native tables'}
     dist.mkdir(parents=True, exist_ok=True)
     # A sibling stage stays on the same filesystem but outside the upload tree.
-    with tempfile.TemporaryDirectory(prefix='.models-3d-', dir=dist.parent) as temporary:
+    with tempfile.TemporaryDirectory(prefix='.models-3d-', dir=dist.parent) as temporary, Progress(
+            *COLUMNS, TaskProgressColumn(), TimeElapsedColumn(),
+            TextColumn('{task.fields[cache]}'), console=console) as progress:
         stage = Path(temporary)
         (stage/'models/3d').mkdir(parents=True)
         try:
-            for identity, association in report['identities'].items():
-                if public_identities is not None and identity not in public_identities:
-                    continue
+            identities = [(identity, row) for identity, row in report['identities'].items()
+                          if public_identities is None or identity in public_identities]
+            task = progress.add_task('Converting 3D', total=len(identities), cache='')
+            for identity, association in identities:
                 category = association['category']
                 source_complete = False
                 try:
@@ -157,7 +179,7 @@ def generate_models(native_objects: GameObjectData, extracted_dir: str | Path, d
                         for name in models:
                             _check_failed_materials(folder, report['models'][name], failed_paths)
                     prepared_additional = prepare_additional_actor(obj, report['identities'][owner_id],
-                        report, folder, additional_cache)
+                        report, folder, additional_cache, animation_cache=animation_cache, texture_cache=texture_cache)
                     model_name = association['model']
                     selection = select_native_view(selection_category, obj, native_objects,
                         model_stem=association['declaration']['model'] if 'declaration' in association else Path(model_name).stem,
@@ -166,7 +188,7 @@ def generate_models(native_objects: GameObjectData, extracted_dir: str | Path, d
                         extracted_dir=folder, outfit_id=identity if category == 'PonySet' else None,
                         csv_first_name=report['csv_libraries'][association['csv']['file']].get('first_declared_name'),
                         csv_excluded_names=report['csv_libraries'][association['csv']['file']].get('excluded_clip_names'),
-                        display_profile=display_profile,
+                        display_profile=display_profile, event_files=event_files,
                         **({'allow_additional_actor': True} if prepared_additional is not None else {}))
                     wardrobe = selection['provenance'].get('wardrobe') or {}
                     for dependency_category, dependency_ids in [('PonySet', wardrobe.get('set_ids', [])),
@@ -206,6 +228,7 @@ def generate_models(native_objects: GameObjectData, extracted_dir: str | Path, d
                         return convert_native(folder/model_name, folder/association['animation'],
                         folder/association['csv']['file'], selection['clip_names'], identity=identity,
                         model_filename=identity, animation_filenames=True,
+                        animation_cache=animation_cache, texture_cache=texture_cache,
                         visible_meshes=selection['visible_meshes'], rest_name=selection['rest_name'],
                         rest_frame=selection.get('rest_frame'), event_path=selection['event_path'],
                         events_absent=selection.get('events_absent', False),
@@ -228,6 +251,10 @@ def generate_models(native_objects: GameObjectData, extracted_dir: str | Path, d
                     # Output integrity checks and writes below remain fatal.
                     source_complete = True
                     model_row = bundle.catalogue['models'][identity]
+                    if 'preferred_animations' in selection:
+                        available = {clip['id'] for clip in model_row['animations']}
+                        model_row['preferredAnimations'] = [name for name in selection['preferred_animations']
+                            if name in available]
                     bundle_files = dict(bundle.files)
                     additional_provenance = None
                     if prepared_additional is not None:
@@ -238,24 +265,27 @@ def generate_models(native_objects: GameObjectData, extracted_dir: str | Path, d
                                 raise ValueError('Conflicting parent/child asset content')
                             bundle_files[key] = data
                     # Complete and validate both actors before staging either.
+                    fixed_model_path = model_path(identity)
+                    pending = {}
                     for key, data in bundle_files.items():
                         digest = hashlib.sha256(data).hexdigest()
-                        if key == model_path(identity):
+                        if key == fixed_model_path:
                             valid = (key == model_row['path'] and digest == model_row['sha256']
                                      and len(data) == model_row['bytes'])
                         else:
                             valid = asset_digest(key) == digest
                         if not valid:
                             raise ValueError('Converter returned an invalid asset key or digest')
-                        path = stage/key
-                        if path.exists() and path.read_bytes() != data:
+                        previous = referenced.get(key)
+                        if previous is not None and previous != digest:
                             raise ValueError('Conflicting generated asset content')
-                    for key, data in bundle_files.items():
+                        if previous is None:
+                            pending[key] = digest
+                    for key, digest in pending.items():
                         path = stage/key
-                        if not path.exists():
-                            path.parent.mkdir(parents=True, exist_ok=True)
-                            path.write_bytes(data)
-                        referenced.add(key)
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        path.write_bytes(bundle_files[key])
+                        referenced[key] = digest
                     catalogue['models'][identity] = model_row
                     catalogue['schemaVersion'] = max(catalogue['schemaVersion'], bundle.catalogue['schemaVersion'])
                     if additional_provenance is not None:
@@ -266,7 +296,8 @@ def generate_models(native_objects: GameObjectData, extracted_dir: str | Path, d
                     association['converted'] = True
                     association['conversion_provenance'] = bundle.provenance
                     association['selection'] = selection['provenance']
-                    association['excluded_clips'] = selection['excluded_clips']
+                    association['excluded_clips'] = [*selection['excluded_clips'],
+                        *(bundle.provenance or {}).get('animation_exclusions', [])]
                     csv_diagnostics = report['csv_libraries'][association['csv']['file']].get('diagnostics', [])
                     for excluded in association['excluded_clips']:
                         invalid = [row for row in csv_diagnostics if row.get('name') == excluded['name']]
@@ -283,6 +314,15 @@ def generate_models(native_objects: GameObjectData, extracted_dir: str | Path, d
                         raise
                     report['generation']['excluded'][identity] = {
                         'code': 'native_source_error', 'reason': f'{type(error).__name__}: {error}'}
+                finally:
+                    stats = animation_cache.stats
+                    hits = stats['memory_hits'] + stats['disk_hits'] + stats['remote_hits']
+                    progress.update(task, advance=1, cache=f"clips: {stats['compiled']} compiled / {hits} reused")
+            report['generation']['cache'] = {
+                'animations': dict(animation_cache.stats),
+                'textures': {'hits': texture_cache.hits, 'misses': texture_cache.misses, 'writes': texture_cache.writes,
+                             'invalid_entries': texture_cache.invalid_entries, 'io_errors': texture_cache.io_errors},
+                'discovery_seconds': discovery_seconds, 'total_seconds': perf_counter() - started}
             if not catalogue['models'] and eligible:
                 raise ValueError('No verified basic 3D scenes; previous catalogue was not replaced')
             # Report unreferenced files without deleting them. Only current
@@ -302,7 +342,7 @@ def generate_models(native_objects: GameObjectData, extracted_dir: str | Path, d
             report['summary']['conversion_exclusions'] = len(report['generation']['excluded'])
             # Diagnostics must be writable before switching the catalogue.
             write_association_report(native_objects, folder, report_path, public_dir=dist, report=report)
-            _publish_local(stage, dist, catalogue)
+            _publish_local(stage, dist, compact_animations(catalogue))
         except BaseException:
             report['generation']['status'] = 'failed; catalogue not intentionally replaced'
             write_association_report(native_objects, folder, report_path, public_dir=dist, report=report)

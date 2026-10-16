@@ -33,7 +33,16 @@ def _strings(value: object, field: str) -> list[str]:
     return [v for v in value if v]
 
 
-def _event_file(folder: Path, stem: str, *, allow_missing: bool = False) -> Path | None:
+def index_event_files(folder: Path) -> dict[str, list[str]]:
+    """Snapshot exact resource names once per build; retain case collisions."""
+    names = {}
+    for path in folder.iterdir():
+        names.setdefault(path.name.casefold(), []).append(path.name)
+    return names
+
+
+def _event_file(folder: Path, stem: str, *, event_files: dict[str, list[str]],
+                allow_missing: bool = False) -> Path | None:
     if (not isinstance(stem, str) or not stem or stem in {'.', '..'}
             or any(c in stem for c in '/\\\0') or any(ord(c) < 32 for c in stem)):
         _fail('invalid_event_source', 'Unsafe or missing event resource stem')
@@ -42,7 +51,7 @@ def _event_file(folder: Path, stem: str, *, allow_missing: bool = False) -> Path
         _fail('unsupported_event_stem', 'Expected native event stem without .xml')
     name = stem + '.xml'
     path = folder / name
-    matches = [p.name for p in folder.iterdir() if p.name.casefold() == name.casefold()]
+    matches = event_files.get(name.casefold(), [])
     if allow_missing and not matches:
         return None
     if not path.is_file():
@@ -179,7 +188,7 @@ def _select_world_view(category: str, obj: GameObject, game_objects: GameObjectD
                        model_stem: str, mesh_names: list[str], clips: list[dict],
                        extracted_dir: str | Path, outfit_id: str | None = None,
                        csv_first_name: str | None = None, csv_excluded_names: list[str] | None = None,
-                       allow_additional_actor: bool = False) -> dict:
+                       allow_additional_actor: bool = False, event_files: dict[str, list[str]]) -> dict:
     """Return explicit visible meshes, rest, and event-free declared clip names.
 
     `clips` is the already validated ordered CSV list of name/start/end/fps.
@@ -326,7 +335,7 @@ def _select_world_view(category: str, obj: GameObject, game_objects: GameObjectD
     add(idle, rest_source if idle == requested_idle else rest_source + ' -> original CSV row 0')
     path, defaults, eventful, absent_hidden = None, {}, set(), []
     if category == 'Pony' and not events_absent:
-        path = _event_file(Path(extracted_dir), event_stem)
+        path = _event_file(Path(extracted_dir), event_stem, event_files=event_files)
         defaults, eventful, digest, absent_hidden = _events(path, model_stem, set(mesh_names))
         provenance['events'].update(file=path.name, sha256=digest)
     if wardrobe and set(wardrobe['mesh_visibility']).intersection(defaults):
@@ -372,7 +381,7 @@ def _select_world_view(category: str, obj: GameObject, game_objects: GameObjectD
 def _ponybook_view(world: dict, *, obj: GameObject, game_objects: GameObjectData,
                    model_stem: str, mesh_names: list[str], clips: list[dict],
                    extracted_dir: str | Path, outfit_id: str | None, csv_first_name: str | None,
-                   csv_excluded_names: list[str] | None, **unused: object) -> dict:
+                   csv_excluded_names: list[str] | None, event_files: dict[str, list[str]], **unused: object) -> dict:
     """Compile a public default appearance, retaining verified town actions.
 
     No player equipment or alternate owner is inferred. Display the first frame
@@ -381,7 +390,8 @@ def _ponybook_view(world: dict, *, obj: GameObject, game_objects: GameObjectData
     Missing Book XML uses the native empty controller for the supplied inputs.
     """
     animation = obj.get('Animation') or {}
-    path = _event_file(Path(extracted_dir), animation.get('Rig_MediumLOD'), allow_missing=True)
+    path = _event_file(Path(extracted_dir), animation.get('Rig_MediumLOD'),
+                       event_files=event_files, allow_missing=True)
     defaults, eventful, digest, absent_hidden = ({}, set(), None, []) if path is None else _events(path, model_stem, set(mesh_names))
     # Reuse Luna's ordered fields; native config consumes Item zero, then
     # changes only the first literal lod0 to lod1. A later Item is not a fallback.
@@ -483,7 +493,8 @@ def select_native_view(category: str, obj: GameObject, game_objects: GameObjectD
                        model_stem: str, mesh_names: list[str], clips: list[dict],
                        extracted_dir: str | Path, outfit_id: str | None = None,
                        csv_first_name: str | None = None, csv_excluded_names: list[str] | None = None,
-                       allow_additional_actor: bool = False, display_profile: str = 'world-preview') -> dict:
+                       allow_additional_actor: bool = False, display_profile: str = 'world-preview',
+                       event_files: dict[str, list[str]] | None = None) -> dict:
     """Prefer a verified PonyBook appearance without discarding a valid world view.
 
     Explicit world-preview preserves the original API. ponybook-default is
@@ -497,7 +508,8 @@ def select_native_view(category: str, obj: GameObject, game_objects: GameObjectD
                 model_stem=model_stem, mesh_names=mesh_names, clips=clips,
                 extracted_dir=extracted_dir, outfit_id=outfit_id,
                 csv_first_name=csv_first_name, csv_excluded_names=csv_excluded_names,
-                allow_additional_actor=allow_additional_actor)
+                allow_additional_actor=allow_additional_actor,
+                event_files=index_event_files(Path(extracted_dir)) if event_files is None else event_files)
     world = _select_world_view(**args)
     if display_profile == 'world-preview':
         return world

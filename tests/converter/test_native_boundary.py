@@ -4,7 +4,7 @@ import struct
 import tempfile
 import unittest
 
-from game_data.model_gen.converter.native import load_native
+from game_data.model_gen.converter.native import NativeInputError, load_native
 from game_data.model_gen.converter.export import convert_native
 from native_fixture import write_fixture
 
@@ -36,6 +36,17 @@ class NativeBoundaryTests(unittest.TestCase):
         (self.folder/'flag.anim').write_bytes(struct.pack('<8sII64sIII', b'RKFORMAT', 5, 2,
                                                         b'self_created', 2, 2, kind)+b''.join(records))
 
+
+    def test_out_of_range_material_index_is_a_native_input_failure(self):
+        path = self.folder/'flag.rk'
+        raw = bytearray(path.read_bytes())
+        submeshes = next(offset for tag, offset, _, _ in
+                         struct.iter_unpack('<4I', raw[80:80 + 24 * 16]) if tag == 1)
+        # The fixture declares one material, so index one is the first invalid ID.
+        struct.pack_into('<I', raw, submeshes + 8, 1)
+        path.write_bytes(raw)
+        with self.assertRaisesRegex(NativeInputError, 'material index.*range'):
+            self.load(['wave'])
 
     def test_tail_export_keeps_original_declared_duration_and_input_bytes(self):
         self.csv.write_text('rest,0,0,15\ntail,46,126,15\n')

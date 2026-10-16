@@ -65,6 +65,11 @@ GLBs carry `atpClip.eventProfile = "ponybook-v1"` and ordered `events` without
 changing standard STEP channels or native interpolation samples. The normal
 pipeline supplies these low-level arguments automatically; users do not maintain
 per-character maps. See the [pipeline contract](../../../../docs/3d-resource-associations.md#native-interaction-profile).
+Normal generation uses the cached export path: skeletal GLBs omit model events,
+which stay on catalogue animation references. It then emits schema 4 with an
+`animationAssets` table and per-model integer indices, deduplicating exact
+references including event bindings. Standalone bundles retain inline references.
+The ATP consumer supports both representations and legacy embedded events.
 Older readers must reject the new version rather than show an incomplete scene. Each row has `path`, `sha256`, `bytes`, `rigKey` and `animations`.
 Animation rows also have `id`, `name` and `duration` in seconds. Paths are asset
 keys resolved by ATP's existing `createAssetUrl`. Normal generation uses
@@ -121,6 +126,13 @@ Accepted header pairs are 5.0, 5.1, 5.2 and 6.2 with the checked section layouts
 this is not a promise to accept arbitrary files with those header values. Luna
 reads face data sequentially, so non-contiguous face ranges are rejected.
 
+At the current lock (`f36858db203b4650079ec1f9e9614cc0dd43441d`),
+Luna's RK magic and face-width checks are Python assertions; it does not check
+version, duplicate section tags, submesh offsets or matching section counts.
+Its ANIM reader does not check version, declared frame type or trailing bytes.
+The adapter's explicit checks therefore remain necessary, including under
+`python -O`; successful Luna decoding alone does not establish these guarantees.
+
 ANIM 5.2 retains the converter's strict little-endian type 0/1/4 handling:
 
 - Type 0, 32 bytes: XYZW float quaternion, XYZ float translation and a unit
@@ -145,6 +157,29 @@ using Luna's default behavior of ignoring it. This is a stricter conversion
 validation policy, not a claim of a Luna defect or a known current-game failure.
 Embedded alpha still takes precedence, and valid same-size sidecars use Luna's
 pixel conversion unchanged.
+
+## Encoded texture cache
+
+`generate_models` uses `raw/model-cache/textures` with the normal report path.
+Its `cache_dir` argument changes the cache root; `texture_cache_bytes` sets the
+committed PNG-entry budget (default 512 MiB, zero disables reuse). The cache is
+outside `dist` and is never included in the published asset closure.
+
+Keys include exact primary/alpha file content, the conversion recipe, Luna's
+version/VCS origin, Pillow, texture2ddecoder and PNG zlib versions. Entries contain
+encoded PNG bytes and dimensions, not retained decoded images. A hit verifies
+length, digest and PNG chunk checksums without expanding pixels. Writes replace
+one complete entry atomically, prune oldest entries to the byte budget, and skip
+entries larger than 64 MiB. Corrupt entries or cache I/O failures fall back to
+source conversion; generation diagnostics count hits, misses, writes, invalid
+entries and I/O errors. Source changes during decoding cannot populate an old key.
+Bump the `native-png-v1` recipe in `native.py` when conversion semantics change.
+
+One local Python 3.14 measurement across 12 real PVR textures (64/512/1024px,
+including alpha sidecars) produced identical PNG digests: cold cache 0.496 s and
+95.4 MB peak process RSS; warm new process 0.0554 s and 51.8 MB. The encoded cache
+occupied 3.44 MB. This measures the texture phase only, with a single run per mode;
+it does not establish full-generation speed or physical cold-disk performance.
 
 ## Numerical and output decisions
 

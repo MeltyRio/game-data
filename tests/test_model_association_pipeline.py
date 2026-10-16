@@ -10,10 +10,11 @@ from types import SimpleNamespace
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, patch, ANY
 
 from bootstrap import ROOT
 from game_data import extractor, model_gen
+from game_data.model_gen.converter.animation_cache import AnimationCache
 from luna_kit.ark import ARK
 from rich.console import Console
 from native_fixture import copy_rk_with_material, write_fixture, write_native_tables
@@ -49,7 +50,7 @@ class Pipeline(unittest.TestCase):
             'Transformer':Mock(return_value=self.transformer),
             'GameData':type('GameData',(),{'load':staticmethod(lambda _:self.game_data)}),
             'GameObjectData':Mock(return_value={'PonyPet':{}}),
-            'generate_images':Mock(), 'generate_models':self.writer}
+            'generate_images':Mock(), 'generate_models':self.writer, 'AnimationCache':AnimationCache}
         exec(compile(ast.Module(body=[build],type_ignores=[]),str(source),'exec'),self.globals)
 
     def run_build(self, skip):
@@ -59,7 +60,7 @@ class Pipeline(unittest.TestCase):
         self.assertTrue(self.run_build(['download','extract']))
         self.writer.assert_called_once_with(self.objects,self.root/'raw/extracted',self.root/'dist',
             self.root/'raw/model-associations.json',campaign=self.transformer.defaultGameCampaign,
-            public_identities={'pony_id','pet_id','costume_id'}, failed_rkms=set())
+            public_identities={'pony_id','pet_id','costume_id'}, failed_rkms=set(), animation_cache=ANY)
         self.globals['GameObjectData'].assert_not_called()
         self.transformer.start.assert_called_once()
         self.transformer.save.assert_called_once()
@@ -188,3 +189,55 @@ class Pipeline(unittest.TestCase):
             self.assertTrue(self.run_build(['download']))
         self.writer.assert_called_once()
         self.globals['generate_images'].assert_called_once()
+
+
+    def test_build_repairs_corrupt_cache_before_publishing_index(self):
+        from test_model_sync import MemoryClient, load_sync
+        from game_data.model_gen.converter.animation_cache import INDEX_KEY
+        self.prepare_extraction()
+        client = MemoryClient()
+        bucket = 'synthetic-local-only'
+        client.put_object(Bucket=bucket, Key='game_version.json', Body=b'{}')
+        self.globals['os'].environ = {'S3_BUCKET': bucket}
+        self.globals['get_s3_client'] = lambda *args, **kwargs: client
+        self.globals['sync'] = load_sync(client)['sync']
+        self.globals['API'] = lambda *args: SimpleNamespace(get_dlc_manifest=lambda: {})
+        caches = []
+        def fresh_cache(directory):
+            cache = AnimationCache(self.root/('first-cache' if not caches else 'retry-cache'))
+            caches.append(cache)
+            return cache
+        self.globals['AnimationCache'] = fresh_cache
+        def build():
+            return self.globals['build_cdn'](self.root/'raw', self.root/'dist', '11.4.3c', True,
+                                            self.root/'overrides', skip=['download'])
+        with self.assertWarns(RuntimeWarning), patch.object(extractor, 'console', Console(quiet=True)):
+            self.assertTrue(build())
+        ref = next(iter(caches[0].records.values()))['asset']
+        key = ref['path']
+        original = client.objects[bucket, key]['Body']
+        for fail in (False, True, False):
+            with self.subTest(failed_upload=fail):
+                client.objects[bucket, key]['Body'] = original[:-1] + bytes([original[-1] ^ 1])
+                index = client.objects[bucket, INDEX_KEY]['Body']
+                manifest = client.objects[bucket, 'manifest.json']['Body']
+                client.calls.clear()
+                client.fail_put.clear()
+                if fail:
+                    client.fail_put.add(key)
+                with self.assertWarns(RuntimeWarning), patch.object(extractor, 'console', Console(quiet=True)):
+                    if fail:
+                        with self.assertRaisesRegex(RuntimeError, 'put failure'):
+                            build()
+                    else:
+                        self.assertTrue(build())
+                self.assertEqual(caches[-1].invalid_remote_assets, {key})
+                writes = [k for op, _, k in client.calls if op == 'put']
+                if fail:
+                    self.assertNotIn(INDEX_KEY, writes)
+                    self.assertNotIn('manifest.json', writes)
+                    self.assertEqual(client.objects[bucket, INDEX_KEY]['Body'], index)
+                    self.assertEqual(client.objects[bucket, 'manifest.json']['Body'], manifest)
+                else:
+                    self.assertEqual(client.objects[bucket, key]['Body'], original)
+                    self.assertLess(writes.index(key), writes.index(INDEX_KEY))

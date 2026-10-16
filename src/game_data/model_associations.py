@@ -30,7 +30,7 @@ def _stem(value: object) -> str:
     return value
 
 
-def _file(folder: Path, name: str) -> Path:
+def _file(folder: Path, name: str, name_index: dict[str, list[str]]) -> Path:
     _stem(name)
     path = folder / name
     if not path.is_file():
@@ -38,7 +38,10 @@ def _file(folder: Path, name: str) -> Path:
     if path.resolve().parent != folder.resolve():
         raise AssociationError('Dependency leaves the extracted directory: ' + name)
     # Do not silently select different case variants on case-insensitive hosts.
-    variants = [p.name for p in folder.iterdir() if p.name.casefold() == name.casefold()]
+    if not name_index:
+        for entry in folder.iterdir():
+            name_index.setdefault(entry.name.casefold(), []).append(entry.name)
+    variants = name_index.get(name.casefold(), [])
     if variants != [name]:
         raise AssociationError('Ambiguous or non-exact dependency spelling: ' + name)
     return path
@@ -130,6 +133,8 @@ def discover_associations(game_objects: GameObjectData, extracted_dir: str | Pat
     """
     folder = Path(extracted_dir)
     rows, model_cache, anim_cache, csv_cache = {}, {}, {}, {}
+    # Extracted inputs stay fixed during one discovery; refresh on the next call.
+    name_index: dict[str, list[str]] = {}
     ponies, pets = game_objects.get('Pony', {}), game_objects.get('PonyPet', {})
     sets, parts = game_objects.get('PonySet', {}), game_objects.get('PonyPart', {})
     owners, set_errors = {}, {}
@@ -143,7 +148,7 @@ def discover_associations(game_objects: GameObjectData, extracted_dir: str | Pat
     def inspect(name: str, cache: dict[str, dict], reader: Callable[[Path], dict]) -> dict:
         if name not in cache:
             try:
-                path = _file(folder, name)
+                path = _file(folder, name, name_index)
                 cache[name] = {'file': name, 'sha256': _sha(path), **reader(path)}
             except (ValueError, OSError, AssertionError, IndexError, struct.error, ZeroDivisionError) as error:
                 cache[name] = {'file': name, 'error': str(error)}
@@ -155,7 +160,7 @@ def discover_associations(game_objects: GameObjectData, extracted_dir: str | Pat
         key = (stem + '.csv', library['frame_count'])
         if key not in csv_cache:
             try:
-                path = _file(folder, key[0])
+                path = _file(folder, key[0], name_index)
                 csv_cache[key] = {'file': key[0], 'sha256': _sha(path),
                                  **_clips(path, library['frame_count'])}
             except (ValueError, OSError) as error:

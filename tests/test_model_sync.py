@@ -18,6 +18,7 @@ import unittest
 from unittest.mock import Mock
 
 from bootstrap import ROOT
+from game_data.model_catalogue import compact_animations, animation_assets, resolve_animation
 from game_data.model_paths import is_asset_path, asset_path_matches, model_path, safe_asset_name
 
 
@@ -86,7 +87,7 @@ def load_sync(client):
     names = {'upload_file', 'upload_single_file', 'prepare_model_upload', 'upload_model_asset', 'sync'}
     functions = [item for item in source.body if isinstance(item, ast.FunctionDef) and item.name in names]
     assert len(functions) == len(names)
-    context = {'safe_asset_name': safe_asset_name, 'is_asset_path': is_asset_path, 'model_path': model_path, 'asset_path_matches': asset_path_matches, 'hashlib': hashlib, 'json': json, 'math': math, 'mimetypes': mimetypes,
+    context = {'animation_assets': animation_assets, 'resolve_animation': resolve_animation, 'safe_asset_name': safe_asset_name, 'is_asset_path': is_asset_path, 'model_path': model_path, 'asset_path_matches': asset_path_matches, 'hashlib': hashlib, 'json': json, 'math': math, 'mimetypes': mimetypes,
         'Path': Path, 're': re, 'Literal': Literal, 'ThreadPoolExecutor': ThreadPoolExecutor,
         'as_completed': as_completed, 'Progress': Progress, 'MAX_WORKERS': 3,
         'HEADERS_TO_CHECK': ['CacheControl', 'ContentType'], 'COLUMNS': [],
@@ -140,6 +141,45 @@ class ModelSync(unittest.TestCase):
         self.model['interactions'] = {'version': 1, 'clickAnimations': []}
         self.catalogue['schemaVersion'] = 2; self.save_catalogue()
         with self.assertRaises(ValueError): self.code['prepare_model_upload'](self.dist)
+
+    def test_compact_animation_table_preserves_model_events_and_child_order(self):
+        child = self.add_additional_actor()
+        original = copy.deepcopy(self.catalogue)
+        binding = {'version': 1, 'events': [
+            {'frame': 0, 'type': 'SubObject', 'meshes': [2], 'visible': True}]}
+        self.catalogue['models']['Pony_Other'] = copy.deepcopy(self.model)
+        self.catalogue['models']['Pony_Other']['animations'][0]['eventBinding'] = binding
+        self.catalogue = compact_animations(self.catalogue)
+        table = animation_assets(self.catalogue)
+        self.assertEqual(len(table), 3)
+        self.model = self.catalogue['models']['Pony_Test']
+        self.assertNotIn('eventBinding', table[0])
+        self.assertEqual(table[2]['eventBinding'], binding)
+        self.assertEqual(self.model['animations'], [0])
+        self.assertEqual(self.model['additionalActor']['model']['animations'], [1])
+        self.assertEqual(self.catalogue['models']['Pony_Other']['animations'],
+                         [2])
+        self.assertEqual(resolve_animation(0, table), original['models']['Pony_Test']['animations'][0])
+        self.assertNotIn('eventBinding', resolve_animation(0, table))
+        self.save_catalogue(); self.run_sync()
+        writes = self.writes()
+        for ref in table:
+            self.assertEqual(writes.count(ref['path']), 1)
+            self.assertLess(writes.index(ref['path']), writes.index('models_3d.json'))
+
+    def test_invalid_compact_animation_references_do_not_upload(self):
+        self.catalogue = compact_animations(self.catalogue)
+        self.model = self.catalogue['models']['Pony_Test']
+        for bad in [True, -1, 1, {'asset': 0}, {'asset': 0, 'eventBinding': {}, 'unexpected': 1}]:
+            self.model['animations'] = [bad]
+            self.save_catalogue()
+            with self.subTest(value=bad), self.assertRaises(ValueError):
+                self.run_sync()
+        self.model['animations'] = [0]
+        self.catalogue['schemaVersion'] = 3
+        self.save_catalogue()
+        with self.assertRaises(ValueError): self.run_sync()
+        self.assertEqual(self.client.calls, [])
 
     def write_asset(self, data):
         digest = hashlib.sha256(data).hexdigest()
@@ -297,5 +337,90 @@ class ModelSync(unittest.TestCase):
         target.write_bytes(old.read_bytes())
 
 
-if __name__ == '__main__':
-    unittest.main()
+
+
+    def test_cached_files_are_uploaded_by_normal_sync_and_missing_remote_asset_is_restored(self):
+        from game_data.model_gen.converter.animation_cache import AnimationCache
+        from game_data.model_gen.converter.export import convert_native
+        from native_fixture import write_fixture
+        root = Path(self.temp.name)
+        write_fixture(root/'native')
+        def generate(cache):
+            return convert_native(root/'native/flag.rk', root/'native/flag.anim', root/'native/flag.csv', ['wave'],
+                identity='Pony_Test', model_filename='Pony_Test', animation_filenames=True,
+                visible_meshes=['flag'], rest_name='rest', event_path=root/'native/flag.xml', animation_cache=cache)
+        first = generate(AnimationCache(root/'cache'))
+        warm = AnimationCache(root/'cache')
+        bundle = generate(warm)
+        self.assertEqual(first, bundle)
+        self.assertEqual(warm.stats['compiled'], 0)
+        self.catalogue = bundle.catalogue
+        for key, data in bundle.files.items():
+            path = self.dist/key
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+        self.save_catalogue()
+        self.run_sync()
+        animation = bundle.catalogue['models']['Pony_Test']['animations'][0]
+        del self.client.objects[self.bucket, animation['path']]
+        self.client.calls.clear()
+        self.run_sync()
+        self.assertEqual(self.client.objects[self.bucket, animation['path']]['Body'], bundle.files[animation['path']])
+        self.assertIn(('put', self.bucket, animation['path']), self.client.calls)
+
+
+    def test_confirmed_corrupt_asset_is_repaired_despite_hash_metadata(self):
+        self.run_sync()
+        key = self.animation['path']
+        expected = (self.dist/key).read_bytes()
+        for metadata_hash in (self.animation['sha256'], 'incorrect'):
+            with self.subTest(metadata_hash=metadata_hash):
+                self.client.objects[self.bucket, key]['Body'] = b'corrupted'
+                self.client.objects[self.bucket, key]['Metadata']['hash'] = metadata_hash
+                self.client.calls.clear()
+                self.code['sync'](self.dist, self.bucket, repair_model_assets={key, 'unreferenced'})
+                self.assertEqual(self.client.objects[self.bucket, key]['Body'], expected)
+                self.assertEqual(self.client.objects[self.bucket, key]['Metadata'],
+                                 {'hash': self.animation['sha256']})
+                self.assertEqual([k for k in self.writes() if k.startswith('models/3d/')], [key])
+                self.assertLess(self.writes().index(key), self.writes().index('manifest.json'))
+        self.client.calls.clear()
+        self.run_sync()
+        self.assertFalse([k for k in self.writes() if k.startswith('models/3d/')])
+
+    def test_repair_failure_and_override_preserve_published_catalogue(self):
+        self.run_sync()
+        key = self.animation['path']
+        old_catalogue = self.client.objects[self.bucket, 'models_3d.json']['Body']
+        old_manifest = self.client.objects[self.bucket, 'manifest.json']['Body']
+        for failure in ('put', 'override-same-hash', 'override-different-hash'):
+            with self.subTest(failure=failure):
+                remote = self.client.objects[self.bucket, key]
+                remote['Body'] = b'corrupted'
+                remote['Metadata'] = {'hash': self.animation['sha256']}
+                self.client.fail_put.clear()
+                if failure == 'put':
+                    self.client.fail_put.add(key)
+                else:
+                    remote['Metadata']['override'] = 'true'
+                    if failure.endswith('different-hash'):
+                        remote['Metadata']['hash'] = 'different'
+                self.client.calls.clear()
+                with self.assertRaises((RuntimeError, ValueError)):
+                    self.code['sync'](self.dist, self.bucket, repair_model_assets={key})
+                self.assertEqual(self.client.objects[self.bucket, key]['Body'], b'corrupted')
+                self.assertEqual(self.client.objects[self.bucket, 'models_3d.json']['Body'], old_catalogue)
+                self.assertEqual(self.client.objects[self.bucket, 'manifest.json']['Body'], old_manifest)
+                self.assertNotIn('models_3d.json', self.writes())
+                self.assertNotIn('manifest.json', self.writes())
+
+
+    def test_changed_asset_after_preflight_is_rejected_before_its_cloud_calls(self):
+        _, assets = self.code['prepare_model_upload'](self.dist)
+        key = self.animation['path']
+        path = self.dist/key
+        data = path.read_bytes()
+        path.write_bytes(data[:-1] + bytes([data[-1] ^ 1]))
+        with self.assertRaisesRegex(ValueError, 'changed after validation'):
+            self.code['upload_model_asset'](self.client, self.bucket, self.dist, key, assets[key])
+        self.assertEqual(self.client.calls, [])

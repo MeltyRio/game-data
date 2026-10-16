@@ -13,7 +13,11 @@ import io
 import math
 import struct
 from pathlib import Path
-from typing import Collection
+from typing import Collection, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .texture_cache import TextureCache
+    from .animation_cache import AnimationCache
 
 import numpy as np
 from numpy.typing import NDArray
@@ -88,7 +92,7 @@ def _validate_model_layout(path: Path) -> None:
         return item
     vertices = section(3)
     submeshes = section(1, 16)
-    section(2)  # Material names use the section-declared stride, not a fixed width.
+    materials = section(2)  # Material names use the section-declared stride, not a fixed width.
     names = section(16, 64)
     if names[1] != submeshes[1]:
         raise NativeInputError("RK submesh/name counts differ")
@@ -103,7 +107,9 @@ def _validate_model_layout(path: Path) -> None:
     # read beyond the face section or attach another submesh's triangles.
     next_index = 0
     for index in range(submeshes[1]):
-        triangles, offset, _, _ = struct.unpack_from('<4I', raw, submeshes[0] + index * 16)
+        triangles, offset, material, _ = struct.unpack_from('<4I', raw, submeshes[0] + index * 16)
+        if material >= materials[1]:
+            raise NativeInputError("Native submesh material index is out of range")
         if offset != next_index:
             raise NativeInputError("Non-contiguous native face layout is unsupported by the Luna parser")
         next_index = offset + triangles * 3
@@ -211,7 +217,8 @@ def _csv_clips(path: Path, frame_count: int, required: set[str], frame_boundary:
 
 
 def _verify_event_source(event_path: str | Path | None, events_absent: bool, names: set[str],
-                         event_approvals: dict[str, list[str]] | None = None) -> tuple[dict, Path | None]:
+                         event_approvals: dict[str, list[str]] | None = None, *,
+                         model_stem: str = "", mesh_names: list[str] | None = None) -> tuple[dict, Path | None]:
     """Validate an explicit event source; absence must be asserted by discovery."""
     if bool(event_path) == bool(events_absent):
         raise NativeInputError("Supply an event XML or explicitly confirm its native source absence")
@@ -237,6 +244,9 @@ def _verify_event_source(event_path: str | Path | None, events_absent: bool, nam
     for animation_list in root.iter("AnimationList"):
         if any(node.tag != "Animation" for node in animation_list):
             raise NativeInputError("Unsupported native animation declaration")
+    from ..interactions import read_events
+    from ..visibility import compile_subobject_event
+    controls = read_events(path)['controls'] if event_approvals is not None else {}
     approved = (event_approvals or {}).get(hashlib.sha256(raw).hexdigest(), [])
     for node in root.iter("Animation"):
         if node.get("Name") in names and set(node.attrib) != {"Name"}:
@@ -254,7 +264,9 @@ def _verify_event_source(event_path: str | Path | None, events_absent: bool, nam
                              and attrs['Open'] in {'Open', 'Closed', 'Happy', 'Frown', 'None'}
                              and attrs['EnableBlink'] in {'0', '1'}) or (
                              event.tag == 'Emitter' and set(attrs) == {'Particle'}
-                             and attrs['Particle'] == 'mlp_arena_pony_defeat_02')
+                             and attrs['Particle'] == 'mlp_arena_pony_defeat_02') or (
+                             event.tag == 'SubObject' and set(attrs) == {'ID', 'Show'}
+                             and attrs['Show'] in {'0', '1'})
                     if not valid or len(event) or (event.text or '').strip():
                         raise NativeInputError('Unsupported approved native event: ' + event.tag)
                     key = (int(frame.get('Index')), event.tag, dict(attrs))
@@ -274,6 +286,8 @@ def _verify_event_source(event_path: str | Path | None, events_absent: bool, nam
                     row = {'frame': int(frame.get('Index')), 'type': event.tag}
                     if event.tag == 'EyeSet':
                         row.update(state=event.get('Open'), enableBlink=event.get('EnableBlink') == '1')
+                    elif event.tag == 'SubObject':
+                        row = compile_subobject_event(event.attrib, row['frame'], controls, model_stem, mesh_names or [])
                     else:
                         row['effect'] = event.get('Particle')
                     if row not in rows:
@@ -298,6 +312,8 @@ def load_native(
     additional_event_paths: Collection[str | Path] = (),
     retained_meshes: Collection[str] | None = None,
     event_approvals: dict[str, list[str]] | None = None,
+    texture_cache: TextureCache | None = None,
+    animation_cache: AnimationCache | None = None,
 ) -> dict:
     """Read native files without axis changes, retargeting, or visibility guesses.
 
@@ -335,8 +351,10 @@ def load_native(
     for path in (rk_path, anim_path, csv_path):
         if not path.is_file():
             raise NativeInputError(f"Missing native input: {path.name}")
+    animation_digest = (animation_cache.digest(anim_path) if animation_cache is not None
+                        else hashlib.sha256(anim_path.read_bytes()).hexdigest())
     try:
-        animation = read_animation(anim_path)
+        animation = animation_cache.read_animation(anim_path) if animation_cache is not None else read_animation(anim_path)
     except ValueError as error:
         raise NativeInputError(str(error)) from error
     major, minor, frame_type = animation.header.major, animation.header.minor, animation.header.frame_type
@@ -380,14 +398,16 @@ def load_native(
             or not isinstance(values, list) or any(not isinstance(name, str) for name in values)
             for key, values in event_approvals.items())):
         raise NativeInputError('Invalid source-bound event approvals')
-    event_source, checked_event_path = _verify_event_source(event_path, events_absent, required_names, event_approvals)
+    event_source, checked_event_path = _verify_event_source(event_path, events_absent, required_names, event_approvals,
+        model_stem=rk_path.stem, mesh_names=[mesh.name for mesh in model.meshes])
     if isinstance(additional_event_paths, (str, bytes, Path)):
         raise NativeInputError("Additional event sources must be a collection of explicit paths")
     extra_event_sources, extra_event_files = [], []
     for source in dict.fromkeys(Path(p).resolve() for p in additional_event_paths):
         if source == checked_event_path:
             continue
-        evidence, checked = _verify_event_source(source, False, required_names, event_approvals)
+        evidence, checked = _verify_event_source(source, False, required_names, event_approvals,
+            model_stem=rk_path.stem, mesh_names=[mesh.name for mesh in model.meshes])
         extra_event_sources.append(evidence)
         extra_event_files.append(checked)
 
@@ -499,7 +519,14 @@ def load_native(
                 output = io.BytesIO()
                 rgba.save(output, format="PNG")
                 return output.getvalue(), rgba.width, rgba.height
-            png, width, height = decode_texture()
+            if texture_cache is None:
+                png, width, height = decode_texture()
+            else:
+                png, width, height = texture_cache.get_or_decode(
+                    texture_dependencies,
+                    settings=f"native-png-v1/no-compress={properties.NoCompress}/external-alpha=false/embedded-preferred/RGBA/pillow-default",
+                    decode=decode_texture,
+                )
             material_ids[mesh.material_index] = len(materials)
             materials.append({"name": material.name, "rkm_fields": raw_fields, "png_bytes": png,
                               "width": width, "height": height, "resolved_shader": resolved_shader,
@@ -545,17 +572,21 @@ def load_native(
             clip['events'] = sorted(events, key=lambda row: row['frame'])
     declared_rest_frame = by_name[rest_name]["start"] if rest_name is not None else rest_frame
     rest_frame = min(declared_rest_frame, frames - 1)
+    current_animation_digest = (animation_cache.digest(anim_path) if animation_cache is not None
+                                else hashlib.sha256(anim_path.read_bytes()).hexdigest())
+    if current_animation_digest != animation_digest:
+        raise NativeInputError("Native animation changed during model preparation")
     result = {"name": model.name, "positions": positions, "texcoords": texcoords, "joints": joints,
             "weights": weights, "primitives": primitives, "materials": materials,
             "bones": [{"name": bone.name, "parent": bone.parentIndex,
                        "bind_global": np.array(bone.matrix_4x4, dtype=np.float64)} for bone in model.bones],
             "clips": clips, "rest": {"name": rest_name, "frame": rest_frame, **transforms(rest_frame, rest_frame)},
-            "provenance": {"animation_sha256": hashlib.sha256(anim_path.read_bytes()).hexdigest(), "luna_dependency": LUNA_DEPENDENCY, "luna_reader": "luna_kit.model.RKModel", "animation_reader": "atp-rk-5.2-0-1-4-v1", "anim_format": {"major": major, "minor": minor, "type": frame_type},
+            "provenance": {"animation_sha256": animation_digest, "luna_dependency": LUNA_DEPENDENCY, "luna_reader": "luna_kit.model.RKModel", "animation_reader": "atp-rk-5.2-0-1-4-v1", "anim_format": {"major": major, "minor": minor, "type": frame_type},
                            "event_source": event_source, "duplicate_csv_rows_merged": duplicates, "unselected_csv_diagnostics": csv_diagnostics,
                            "rest_source": "native-csv-first-frame" if rest_name is not None else "caller-selected-native-frame",
                            "native_position_scale": NATIVE_POSITION_SCALE, "material_sources": material_sources,
                            "default_shader_materials": [item["name"] for item in materials if item["native_default_shader"]],
-                           "files": [{"name": path.name, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+                           "files": [{"name": path.name, "sha256": (animation_cache.digest(path) if animation_cache is not None else hashlib.sha256(path.read_bytes()).hexdigest())}
                                      for path in dict.fromkeys(dependencies)]}}
     if extra_event_sources:
         result['provenance']['additional_event_sources'] = extra_event_sources

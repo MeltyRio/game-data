@@ -2,9 +2,10 @@
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from bootstrap import ROOT
-from game_data.model_gen.selection import SelectionError, select_native_view
+from game_data.model_gen.selection import SelectionError, select_native_view, index_event_files, _event_file
 
 
 class Objects(dict):
@@ -111,3 +112,45 @@ class PonyBookProfileTests(unittest.TestCase):
         self.assertEqual(self.select()['provenance']['ponybook']['idle']['name'], 'bind')
         self.assertEqual(self.select()['rest_name'], 'bind')
         self.assertNotIn('other_idle', self.select()['clip_names'])
+
+
+    def test_filename_index_reuses_exact_world_and_book_lookups(self):
+        expected = self.select()
+        original = Path.iterdir
+        with patch.object(Path, 'iterdir', autospec=True, side_effect=original) as scan:
+            names = index_event_files(self.folder)
+            for _ in range(3):
+                self.assertEqual(self.select(event_files=names), expected)
+            self.assertEqual(scan.call_count, 1)
+
+    def test_filename_index_missing_book_and_new_build(self):
+        (self.folder/'book.xml').unlink()
+        names = index_event_files(self.folder)
+        result = self.select(event_files=names)
+        self.assertEqual(result['provenance']['ponybook']['event_source'],
+                         'missing-input-native-empty-controller')
+        self.xml('book', ['book_event'])
+        current = self.select(event_files=index_event_files(self.folder))
+        self.assertEqual(current['provenance']['ponybook']['event_source'], 'xml')
+        (self.folder/'world.xml').unlink()
+        self.fails('missing_event_source', event_files=index_event_files(self.folder))
+
+    def test_filename_index_rejects_nonexact_names(self):
+        # Use the actual filesystem's result: case-insensitive lookup must
+        # still reject a spelling mismatch, while case-sensitive lookup misses.
+        (self.folder/'book.xml').rename(self.folder/'Book.xml')
+        expected = ('ambiguous_event_source' if (self.folder/'book.xml').is_file()
+                    else 'missing_event_source')
+        self.fails(expected, event_files=index_event_files(self.folder))
+        names = {'world.xml': ['world.xml', 'World.xml']}
+        with self.assertRaises(SelectionError) as error:
+            _event_file(self.folder, 'world', event_files=names)
+        self.assertEqual(error.exception.code, 'ambiguous_event_source')
+
+    def test_filename_index_rejects_real_case_collision(self):
+        try:
+            with (self.folder/'World.xml').open('x') as target:
+                target.write('<AnimationList/>')
+        except FileExistsError:
+            self.skipTest('Filesystem cannot represent case-distinct filenames')
+        self.fails('ambiguous_event_source', event_files=index_event_files(self.folder))

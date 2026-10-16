@@ -86,12 +86,80 @@ class NativeControls(unittest.TestCase):
         self.assertIn('Missing native texture', str(row['provenance']['interactions']))
 
 
+    def subobjects(self, frames, declarations=None):
+        declarations = declarations or '<body><SubObject ID="prop" Name="hat" DefaultVisible="0"/></body>'
+        self.path.write_text('<MeshList>'+declarations+'</MeshList><AnimationList><Animation Name="wave">'
+            + frames + '</Animation></AnimationList>')
+
+    def test_subobject_uses_exact_model_id_and_all_matching_native_mesh_indices(self):
+        self.names += ['hat', 'hat']
+        self.subobjects('<Frame Index="0"><SubObject ID="prop" Show="1"/></Frame>'
+            '<Frame Index="3"><SubObject ID="prop" Show="0"/></Frame>')
+        result = self.run_selection()
+        self.assertIn('wave', result['clip_names'])
+        self.assertEqual(result['model_interactions']['subObjects'], [6, 7])
+        self.assertEqual(result['animation_events']['wave'], [
+            {'frame': 0, 'type': 'SubObject', 'meshes': [6, 7], 'visible': True},
+            {'frame': 3, 'type': 'SubObject', 'meshes': [6, 7], 'visible': False}])
+        self.assertIn('hat', result['retained_meshes'])
+        self.assertNotIn('hat', result['visible_meshes'])
+
+    def test_subobject_missing_model_id_mesh_or_conflicting_event_excludes_whole_clip(self):
+        self.names += ['hat']
+        cases = [
+            ('<other><SubObject ID="prop" Name="hat" DefaultVisible="0"/></other>',
+             '<Frame Index="0"><SubObject ID="prop" Show="1"/></Frame>'),
+            ('<body><SubObject ID="prop" Name="absent" DefaultVisible="0"/></body>',
+             '<Frame Index="0"><SubObject ID="prop" Show="1"/></Frame>'),
+            ('<body><SubObject ID="prop" Name="hat" DefaultVisible="0"/></body>',
+             '<Frame Index="0"><SubObject ID="missing" Show="1"/></Frame>'),
+            ('<body><SubObject ID="prop" Name="hat" DefaultVisible="0"/></body>',
+             '<Frame Index="0"><SubObject ID="prop" Show="1"/><SubObject ID="prop" Show="0"/></Frame>'),
+        ]
+        for declarations, frames in cases:
+            with self.subTest(declarations=declarations, frames=frames):
+                self.subobjects(frames, declarations)
+                result = self.run_selection()
+                self.assertNotIn('wave', result['clip_names'])
+                self.assertTrue(any(row.get('name') == 'wave' for row in result['provenance']['interactions']['diagnostics']))
+
+    def test_subobject_does_not_borrow_target_from_another_event_document(self):
+        self.names += ['hat']
+        self.subobjects('')
+        other = self.root/'book.xml'
+        other.write_text('<MeshList/><AnimationList><Animation Name="wave"><Frame Index="0">'
+            '<SubObject ID="prop" Show="1"/></Frame></Animation></AnimationList>')
+        base = select_native_view('Pony', self.obj, Objects(), model_stem='body', mesh_names=self.names,
+            clips=self.clips, extracted_dir=self.root, csv_first_name='rest', csv_excluded_names=[])
+        base['additional_event_paths'] = [other]
+        result = prepare_interactions(base, 'Pony', self.obj, model_stem='body', mesh_names=self.names, clips=self.clips)
+        self.assertNotIn('wave', result['clip_names'])
+        self.assertIn('rest', result['clip_names'])
+        self.assertTrue(any(row.get('name') == 'wave' and row.get('reason') == 'unresolved-native-subobject:prop'
+            for row in result['provenance']['interactions']['diagnostics']))
+
+    def test_all_valid_library_clips_are_considered_and_native_preferences_retained(self):
+        self.clips += [{'name': 'library_only', 'start': 0, 'end': 4, 'fps': 15}]
+        result = self.run_selection()
+        self.assertIn('library_only', result['clip_names'])
+        self.assertNotIn('library_only', result['preferred_animations'])
+        self.assertIn('rest', result['preferred_animations'])
+        self.assertIn('wave', result['preferred_animations'])
+
+    def test_pet_library_expansion_does_not_add_pony_events_or_controllers(self):
+        base = {'clip_names': ['rest'], 'excluded_clips': [], 'provenance': {}}
+        result = prepare_interactions(base, 'Pet', {}, model_stem='body', mesh_names=['body'], clips=self.clips)
+        self.assertEqual(result['clip_names'], ['rest', 'wave', 'gen_tap_north', 'gen_snap_01', 'arena_pony_defeat'])
+        self.assertEqual(result['preferred_animations'], ['rest'])
+        self.assertNotIn('interactions', result)
+
+
 class NormalPipeline(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name); self.raw = self.root/'raw'; self.dist = self.root/'dist'
         write_fixture(self.raw); self.objects = write_native_tables(self.raw)
-        self.names = ['body', 'eyes_open', 'eyes_shut', 'eyes_shut', 'eyes_happy', 'eyes_frown']
+        self.names = ['body', 'eyes_open', 'eyes_shut', 'eyes_shut', 'eyes_happy', 'eyes_frown', 'hat']
         data = (self.raw/'flag.rk').read_bytes()
         entries, sections = [], []
         for i in range(24):
@@ -113,11 +181,17 @@ class NormalPipeline(unittest.TestCase):
         (self.raw/'flag.xml').write_text('<MeshList/><AnimationList><Animation Name="wave">'
             '<Frame Index="1"><EyeSet Open="Happy" EnableBlink="0"/></Frame></Animation></AnimationList>')
 
+    def catalogue(self):
+        catalogue = json.loads((self.dist/'models_3d.json').read_text())
+        for model in catalogue['models'].values():
+            model['animations'] = [catalogue['animationAssets'][index] for index in model['animations']]
+        return catalogue
+
     def test_normal_generation_retains_hidden_meshes_and_source_events(self):
         self.assertEqual(_model(self.raw/'flag.rk')['meshes'], self.names)
         report = generate_models(self.objects, self.raw, self.dist, self.root/'report.json', campaign={})
-        catalogue = json.loads((self.dist/'models_3d.json').read_text())
-        self.assertEqual(catalogue['schemaVersion'], 3)
+        catalogue = self.catalogue()
+        self.assertEqual(catalogue['schemaVersion'], 4)
         model = catalogue['models']['Synthetic_Flag']
         self.assertEqual(model['path'], 'models/3d/Synthetic_Flag.glb')
         self.assertEqual(model['interactions'], {'version': 1, 'clickAnimations': ['wave']})
@@ -130,20 +204,47 @@ class NormalPipeline(unittest.TestCase):
         self.assertEqual(doc['extras']['atpInteractions']['eyes']['Closed'], [2, 3])
         wave = next(row for row in model['animations'] if row['id'] == 'wave')
         clip = glb_json((self.dist/wave['path']).read_bytes())['extras']['atpClip']
-        self.assertEqual(clip['eventProfile'], 'ponybook-v1')
-        self.assertEqual(clip['events'], [{'frame': 1, 'type': 'EyeSet', 'state': 'Happy', 'enableBlink': False}])
+        self.assertNotIn('eventProfile', clip)
+        self.assertNotIn('events', clip)
+        self.assertEqual(wave['eventBinding'], {'version': 1, 'events': [
+            {'frame': 1, 'type': 'EyeSet', 'state': 'Happy', 'enableBlink': False}]})
         self.assertTrue(report['identities']['Synthetic_Flag']['converted'])
 
     def test_normal_generation_keeps_explicit_empty_eye_noop(self):
         self.objects['Pony']['Synthetic_Flag']['Eyes'] = {
             'EyeSubObject_'+state: [] for state in ['Open','Closed','Happy','Frown']}
         generate_models(self.objects, self.raw, self.dist, self.root/'report.json', campaign={})
-        row = json.loads((self.dist/'models_3d.json').read_text())['models']['Synthetic_Flag']
+        row = self.catalogue()['models']['Synthetic_Flag']
         doc = glb_json((self.dist/row['path']).read_bytes())
         self.assertEqual(doc['extras']['atpInteractions']['eyes'], {
             state: [] for state in ['Open','Closed','Happy','Frown']})
         wave = next(clip for clip in row['animations'] if clip['id'] == 'wave')
-        self.assertEqual(len(glb_json((self.dist/wave['path']).read_bytes())['extras']['atpClip']['events']), 1)
+        self.assertNotIn('events', glb_json((self.dist/wave['path']).read_bytes())['extras']['atpClip'])
+        self.assertEqual(len(wave['eventBinding']['events']), 1)
+
+    def test_normal_subobject_generation_retains_prop_and_binds_events_outside_shared_glb(self):
+        (self.raw/'flag.xml').write_text('<MeshList><flag><SubObject ID="prop" Name="hat" DefaultVisible="0"/>'
+            '</flag></MeshList><AnimationList><Animation Name="wave">'
+            '<Frame Index="0"><SubObject ID="prop" Show="1"/></Frame>'
+            '<Frame Index="1"><EyeSet Open="Happy" EnableBlink="0"/><SubObject ID="prop" Show="0"/></Frame>'
+            '</Animation></AnimationList>')
+        report = generate_models(self.objects, self.raw, self.dist, self.root/'report.json', campaign={})
+        self.assertTrue(report['identities']['Synthetic_Flag']['converted'])
+        model = self.catalogue()['models']['Synthetic_Flag']
+        self.assertIn('wave', model['preferredAnimations'])
+        doc = glb_json((self.dist/model['path']).read_bytes())
+        profile = doc['extras']['atpInteractions']
+        self.assertEqual(profile['subObjects'], [6])
+        prop = next(i for i, node in enumerate(doc['nodes']) if node.get('extras', {}).get('atpNativeMeshIndex') == 6)
+        self.assertIn(prop, profile['hiddenNodes'])
+        self.assertNotIn(prop, doc['scenes'][0]['nodes'])
+        self.assertFalse(doc['nodes'][prop]['extras']['atpDefaultVisible'])
+        wave = next(row for row in model['animations'] if row['id'] == 'wave')
+        self.assertEqual(wave['eventBinding']['events'], [
+            {'frame': 0, 'type': 'SubObject', 'meshes': [6], 'visible': True},
+            {'frame': 1, 'type': 'EyeSet', 'state': 'Happy', 'enableBlink': False},
+            {'frame': 1, 'type': 'SubObject', 'meshes': [6], 'visible': False}])
+        self.assertNotIn('events', glb_json((self.dist/wave['path']).read_bytes())['extras']['atpClip'])
 
     def test_converter_rejects_missing_or_changed_source_events(self):
         from unittest.mock import patch

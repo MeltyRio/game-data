@@ -64,7 +64,7 @@ class AdditionalGeneration(unittest.TestCase):
     def test_normal_generation_keeps_two_independent_rigs_and_native_queue_order(self):
         self.prepare()
         report = self.generate(public_identities={'Synthetic_Flag'})
-        self.assertEqual(self.catalogue()['schemaVersion'], 2)
+        self.assertEqual(self.catalogue()['schemaVersion'], 4)
         row = self.catalogue()['models']['Synthetic_Flag']
         self.assert_scene_closed(row)
         child = row['additionalActor']
@@ -120,6 +120,23 @@ class AdditionalGeneration(unittest.TestCase):
         self.assertFalse((self.dist/'models_3d.json').exists())
         self.assertFalse(list((self.dist/'models/3d').rglob('*.glb')))
         self.assertEqual(ordinary.read_text(), 'keep')
+
+    def test_unencodable_child_clip_keeps_original_indices_by_excluding_parent(self):
+        self.prepare()
+        # The CSV is valid, but its first clip cannot fit FLOAT sample times.
+        # Dropping it would silently make the second native action index zero.
+        (self.native/'child.csv').write_text('second,1,4,1e-40\nfirst,0,0,15\n')
+        ordinary = copy.deepcopy(self.objects['Pony']['Synthetic_Flag'])
+        ordinary.pop('AdditionalObject')
+        self.objects['Pony']['Synthetic_Ordinary'] = ordinary
+        with np.errstate(over='ignore'):
+            report = self.generate()
+        self.assertEqual(set(self.catalogue()['models']), {'Synthetic_Ordinary'})
+        self.assertEqual(report['generation']['excluded']['Synthetic_Flag']['code'],
+                         'additional_actor_unverified')
+        self.assertIn('original CSV animation',
+                      report['generation']['excluded']['Synthetic_Flag']['reason'])
+        self.assertFalse((self.dist/'models/3d/Synthetic_Flag.glb').exists())
 
     def test_child_material_extraction_failure_excludes_parent_but_keeps_ordinary_model(self):
         self.prepare()

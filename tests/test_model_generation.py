@@ -11,6 +11,7 @@ from xml.etree import ElementTree as ET
 from bootstrap import ROOT
 from native_fixture import copy_rk_with_material, write_fixture, write_native_tables
 from game_data import model_gen
+from game_data.model_catalogue import animation_assets, resolve_animation
 from luna_kit.gameobjectdata import GameObjectData
 
 
@@ -31,7 +32,15 @@ class ModelGeneration(unittest.TestCase):
             campaign=kwargs.pop('campaign', self.campaign), **kwargs)
 
     def catalogue(self):
-        return json.loads((self.dist/'models_3d.json').read_text())
+        catalogue = json.loads((self.dist/'models_3d.json').read_text())
+        assets = animation_assets(catalogue)
+        def expand(model):
+            model['animations'] = [resolve_animation(reference, assets) for reference in model['animations']]
+            if 'additionalActor' in model:
+                expand(model['additionalActor']['model'])
+        for model in catalogue['models'].values():
+            expand(model)
+        return catalogue
 
     def seed_generation(self):
         self.generate()
@@ -310,6 +319,15 @@ class ModelGeneration(unittest.TestCase):
                         for identity in ['Synthetic_Flag', 'Synthetic_Other']}
         self.objects = write_native_tables(self.native, declarations)
         report = self.generate()
+        wire = json.loads((self.dist/'models_3d.json').read_text())
+        self.assertEqual(wire['schemaVersion'], 4)
+        self.assertIsInstance(wire['animationAssets'], list)
+        self.assertTrue(wire['animationAssets'])
+        self.assertTrue(all(isinstance(ref, dict) for ref in wire['animationAssets']))
+        self.assertTrue(all(type(index) is int for row in wire['models'].values() for index in row['animations']))
+        self.assertEqual(wire['models']['Synthetic_Flag']['animations'],
+                         wire['models']['Synthetic_Other']['animations'])
+        self.assertEqual(len(wire['animationAssets']), len(wire['models']['Synthetic_Flag']['animations']))
         rows = self.assert_closed()['models']
         self.assertEqual(len(rows), 2)
         self.assertNotEqual(rows['Synthetic_Flag']['path'], rows['Synthetic_Other']['path'])

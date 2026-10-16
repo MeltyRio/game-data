@@ -11,6 +11,8 @@ import re
 from typing import TYPE_CHECKING
 from xml.etree import ElementTree as ET
 
+from .visibility import VisibilityError, compile_subobject_event
+
 if TYPE_CHECKING:
     from luna_kit.gameobjectdata import GameObject
 
@@ -59,8 +61,11 @@ def read_events(path: Path) -> dict:
     for section in root:
         if section.tag == 'MeshList':
             for model in section:
+                if model.attrib or (model.text or '').strip():
+                    raise InteractionError('Unsupported native model declaration')
                 for item in model:
-                    if item.tag != 'SubObject' or set(item.attrib) != {'ID', 'Name', 'DefaultVisible'} or len(item):
+                    if (item.tag != 'SubObject' or set(item.attrib) != {'ID', 'Name', 'DefaultVisible'}
+                            or len(item) or (item.text or '').strip()):
                         raise InteractionError('Unsupported native mesh declaration')
                     key = (model.tag, item.get('ID'))
                     value = (item.get('Name'), item.get('DefaultVisible'))
@@ -101,8 +106,12 @@ def prepare_interactions(selection: dict, category: str, obj: GameObject, *,
     disable this optional profile; they never turn eventful actions into bare
     skeletal clips. Default masks and the previously validated rest stay intact.
     """
+    preferred = list(dict.fromkeys([*selection['clip_names'],
+        *(row['name'] for row in selection['excluded_clips'] if row['reason'] in
+          {'native_events_not_supported', 'ponybook_native_events_not_supported'})]))
     if category != 'Pony':
-        return selection
+        return {**selection, 'clip_names': list(dict.fromkeys([*selection['clip_names'], *(clip['name'] for clip in clips)])),
+                'preferred_animations': preferred}
     result = {**selection, 'clip_names': list(selection['clip_names']),
               'excluded_clips': list(selection['excluded_clips']),
               'provenance': dict(selection['provenance'])}
@@ -135,10 +144,11 @@ def prepare_interactions(selection: dict, category: str, obj: GameObject, *,
     available = {clip['name']: clip for clip in clips}
     candidates = list(dict.fromkeys([*selection['clip_names'],
         *(row['name'] for row in selection['excluded_clips'] if row['reason'] in {'native_events_not_supported', 'ponybook_native_events_not_supported'}),
-        *requested_clicks, 'arena_pony_defeat']))
+        *requested_clicks, 'arena_pony_defeat', *(clip['name'] for clip in clips)]))
     retained = set(selection['visible_meshes']) | {mesh_names[i] for i in all_eyes}
     events, selected, approvals = {}, [], {}
-    supported_types = {'EyeSet', 'Emitter'}
+    supported_types = {'EyeSet', 'Emitter', 'SubObject'}
+    subobjects = set()
     for name in candidates:
         if name not in available:
             if name in requested_clicks or name == 'arena_pony_defeat':
@@ -166,6 +176,16 @@ def prepare_interactions(selection: dict, category: str, obj: GameObject, *,
                     reason = 'missing-native-eye-state:' + state; break
                 event = {'frame': frame, 'type': kind, 'state': state, 'enableBlink': attrs['EnableBlink'] == '1'}
                 needed |= {mesh_names[i] for i in all_eyes}
+            elif kind == 'SubObject':
+                try:
+                    bindings = [compile_subobject_event(attrs, frame, document['controls'], model_stem, mesh_names)
+                        for _, document in documents if row in document['animations'].get(name, [])]
+                    event = bindings[0]
+                    if any(binding != event for binding in bindings[1:]):
+                        raise VisibilityError('conflicting-native-subobject-sources')
+                except VisibilityError as error:
+                    reason = str(error); break
+                needed |= {mesh_names[i] for i in event['meshes']}
             else:
                 if effect_resolver is None:
                     reason = 'unsupported-native-event:Emitter'; break
@@ -173,17 +193,22 @@ def prepare_interactions(selection: dict, category: str, obj: GameObject, *,
                     event = effect_resolver(attrs, frame)
                 except ValueError as error:
                     reason = 'unsupported-native-emitter:' + str(error); break
-            key = (event['frame'], kind, tuple(event.get('meshes', [])))
-            if key in keys and keys[key] != event:
+            targets = event['meshes'] if kind == 'SubObject' else [event.get('effect')]
+            event_keys = [(event['frame'], kind, target) for target in targets]
+            value = event['visible'] if kind == 'SubObject' else event
+            if any(key in keys and keys[key] != value for key in event_keys):
                 reason = 'conflicting-native-event'; break
-            keys[key] = event
+            keys.update((key, value) for key in event_keys)
             if event not in compiled: compiled.append(event)
         if reason:
             diagnostics.append({'code': 'native-action-excluded', 'name': name, 'reason': reason, 'events': raw_events})
+            result['excluded_clips'] = [row for row in result['excluded_clips'] if row['name'] != name]
+            result['excluded_clips'].append({'name': name, 'reason': reason})
             continue
         selected.append(name)
         if compiled: events[name] = compiled
         retained |= needed
+        subobjects.update(i for event in compiled if event['type'] == 'SubObject' for i in event['meshes'])
         for _, document in documents:
             approvals.setdefault(document['sha256'], []).append(name)
     click_names = [name for name in requested_clicks if name in selected]
@@ -191,6 +216,12 @@ def prepare_interactions(selection: dict, category: str, obj: GameObject, *,
     model_profile = {'version': 1}
     if all_eyes or any(event['type'] == 'EyeSet' for rows in events.values() for event in rows):
         model_profile['eyes'] = eyes
+    if subobjects:
+        model_profile['subObjects'] = sorted(subobjects)
+    result['clip_names'] = selected
+    result['preferred_animations'] = [name for name in preferred if name in selected]
+    result['excluded_clips'] = [row for row in result['excluded_clips'] if row['name'] not in selected]
+    result['provenance']['clip_scope'] = 'all valid clips in the verified native library; unsupported events explicitly excluded'
     if 'arena_pony_defeat' in selected:
         profile['dizzyAnimation'] = 'arena_pony_defeat'
     if not (blink or click_names or events or 'dizzyAnimation' in profile):

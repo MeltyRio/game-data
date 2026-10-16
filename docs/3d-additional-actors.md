@@ -120,7 +120,7 @@ A row can contain:
 
 ```text
 additionalActor: {
-  model: { path, sha256, bytes, rigKey, animations: AnimationRef[] },
+  model: { path, sha256, bytes, rigKey, animations: (number | AnimationRef)[] },
   transform: number[16], // column-major GLTF-space rest matrix
   parentRoot: number,   // zero-based native parent joint ordinal
   controller: "native-first-then-random-v1"
@@ -128,12 +128,15 @@ additionalActor: {
 ```
 
 The nested model's animation rig keys match that model, not its parent. There
-are no nested children. A catalogue containing this required capability uses
-`schemaVersion: 2`, so older schema-1 clients reject it instead of silently
-showing an incomplete model. A catalogue with only ordinary models remains
-schema 1; material UV clocks also require schema 2. A parent with the optional
-PonyBook interaction profile uses schema 3; its child retains the same strict
-independent controller described here.
+are no nested children. Normal generation uses `schemaVersion: 4` with a shared
+`animationAssets` table. Parent and child animation lists contain indices into
+that table; resolving them preserves the child's original CSV queue order.
+Legacy inline `AnimationRef` entries remain readable. Direct exports use schema
+1 for ordinary models, schema 2 for additional actors or material UV clocks,
+and schema 3 for the earlier PonyBook interaction profile. Schema 4 is required
+for the shared table or separate event bindings/SubObject controls, so older
+clients reject these catalogues instead of silently omitting behavior. The child
+retains the same strict independent controller described here.
 
 Both parent and child bundles must finish successfully, and all their asset keys
 and content digests must validate, before any scene files are staged. Shared child bundles
@@ -151,13 +154,7 @@ bounds, as with the existing single-actor framing limitation.
 
 ## Validation
 
-`tests/test_model_additional.py` uses self-authored RK/ANIM/CSV, real Luna XML
-parsing and the normal generation entry point. It covers independent rigs,
-original clip order, shared child data, bad/empty/duplicate CSV records, missing
-sources or root, partial failure, immutable hash rejection, campaign overrides,
-ordinary schema-1 stability and both rotation policies. An independent world
-matrix oracle compares transformed points, including nonzero root X/Z movement
-and a root Y change that must not affect placement.
+`tests/test_model_additional.py` uses self-authored RK/ANIM/CSV inputs and the normal generation entry point. It covers independent rigs and native clip order, child-asset preservation when the parent rest pose changes, missing child resources, unencodable child clips, and failed child materials.
 
 Real-resource coverage and browser/GPU acceptance are recorded separately in
 private audit evidence. The existence of a valid association or a successful

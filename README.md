@@ -83,3 +83,17 @@ The normal build includes native model/animation generation after Transformer.
 See [source associations, scope, safe tests and publication](docs/3d-resource-associations.md).
 Use `--skip model_gen` to skip this stage; generated resources share the existing
 dist directory, sync process and root manifest.
+
+Animations are compiled once per compatible source rig/clip and reused across
+models. The stage displays progress and reports cache hits and compilations.
+Local animation and encoded-texture caches live under `raw/model-cache`, outside
+`dist`, and survive same-version rebuilds. A build with the existing `--upload`
+option can restore animation entries from the configured S3 bucket; its cache
+index is saved only after normal sync succeeds. Offline builds need no bucket.
+These caches are disposable and do not establish native resource associations.
+
+The catalogue uses schema 4: a shared animation-reference table, per-model
+selections and native visibility event bindings.
+Update the [ATP viewer](https://github.com/all-the-ponies/all-the-ponies/pull/35)
+before publishing schema 4 resources. Existing fixed Object ID model URLs and
+non-atomic publication behavior are unchanged.

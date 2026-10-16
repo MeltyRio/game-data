@@ -25,6 +25,7 @@ from .data_types.GameDataTypes import (
 from .console import COLUMNS, console, track
 from .s3 import get_s3_client
 from .utils import json_dumps_compact
+from .model_catalogue import animation_assets, resolve_animation
 from .model_paths import is_asset_path, asset_path_matches, model_path, safe_asset_name
 
 if TYPE_CHECKING:
@@ -51,6 +52,8 @@ def upload_file(
     cache_control: str | None = None,
     *,
     strict: bool = False,
+    repair: bool = False,
+    expected_sha256: str | None = None,
 ) -> str:
     metadata = {}
 
@@ -69,6 +72,8 @@ def upload_file(
         extra_args['CacheControl'] = cache_control
         
     hash = hashlib.sha256(data).hexdigest()
+    if expected_sha256 is not None and hash != expected_sha256:
+        raise ValueError('3D resource changed after validation: ' + key)
 
     metadata['hash'] = hash
 
@@ -82,9 +87,9 @@ def upload_file(
         try:
             object = client.head_object(Bucket = bucket, Key = key)
             current_metadata = object['Metadata']
-            if strict and current_metadata.get('override') == 'true' and current_metadata.get('hash') != hash:
-                raise ValueError(f'Cannot publish 3D resource over a different remote override: {key}')
-            if object['Metadata'].get('override') == 'true' or object['Metadata'].get('hash') == hash:
+            if strict and current_metadata.get('override') == 'true' and (repair or current_metadata.get('hash') != hash):
+                raise ValueError(f'Cannot replace a protected remote 3D resource override: {key}')
+            if not repair and (current_metadata.get('override') == 'true' or current_metadata.get('hash') == hash):
                 upload = False
             
             for header in HEADERS_TO_CHECK:
@@ -183,8 +188,9 @@ def prepare_model_upload(dist_folder: Path) -> tuple[bytes | None, dict[str, Mod
         raise ValueError('Non-finite value in 3D catalogue: ' + value)
     catalogue = json.loads(data, parse_constant=invalid_constant)
     if (not isinstance(catalogue, dict) or type(catalogue.get('schemaVersion')) is not int
-            or catalogue['schemaVersion'] not in (1, 2, 3) or not isinstance(catalogue.get('models'), dict)):
+            or catalogue['schemaVersion'] not in (1, 2, 3, 4) or not isinstance(catalogue.get('models'), dict)):
         raise ValueError('Unsupported 3D catalogue')
+    shared_animations = animation_assets(catalogue)
     assets: dict[str, ModelUploadAsset] = {}
     def asset(ref: object, name: str | None = None, *, fixed_model: bool = False) -> None:
         if not isinstance(ref, dict):
@@ -216,7 +222,8 @@ def prepare_model_upload(dist_folder: Path) -> tuple[bytes | None, dict[str, Mod
         if not isinstance(animations, list) or (require_playable and not animations):
             raise ValueError('Invalid 3D animation list')
         ids = set()
-        for animation in animations:
+        for reference in animations:
+            animation = resolve_animation(reference, shared_animations)
             asset(animation, animation.get('id') if isinstance(animation, dict) else None)
             name, label, duration = animation.get('id'), animation.get('name'), animation.get('duration')
             if (not isinstance(name, str) or not name or name in ids
@@ -226,9 +233,41 @@ def prepare_model_upload(dist_folder: Path) -> tuple[bytes | None, dict[str, Mod
                     or animation['rigKey'] != model['rigKey']):
                 raise ValueError('Invalid or incompatible 3D animation')
             ids.add(name)
+            if 'eventBinding' in animation:
+                binding = animation['eventBinding']
+                if (catalogue['schemaVersion'] != 4 or not isinstance(binding, dict)
+                        or set(binding) != {'version', 'events'} or type(binding.get('version')) is not int
+                        or binding['version'] != 1 or not isinstance(binding['events'], list)):
+                    raise ValueError('Invalid native animation event binding')
+                previous = -1
+                for event in binding['events']:
+                    if not isinstance(event, dict) or type(event.get('frame')) is not int or event['frame'] < previous or event['frame'] < 0:
+                        raise ValueError('Invalid native event frame')
+                    previous = event['frame']
+                    kind = event.get('type')
+                    if kind == 'SubObject':
+                        valid = (set(event) == {'frame', 'type', 'meshes', 'visible'} and type(event['visible']) is bool
+                                 and isinstance(event['meshes'], list) and bool(event['meshes'])
+                                 and all(type(i) is int and i >= 0 for i in event['meshes'])
+                                 and len(event['meshes']) == len(set(event['meshes'])))
+                    elif kind == 'EyeSet':
+                        valid = (set(event) == {'frame', 'type', 'state', 'enableBlink'}
+                                 and event['state'] in {'Open', 'Closed', 'Happy', 'Frown', 'None'}
+                                 and type(event['enableBlink']) is bool)
+                    elif kind == 'Emitter':
+                        valid = set(event) == {'frame', 'type', 'effect'} and isinstance(event['effect'], str) and bool(event['effect'])
+                    else:
+                        valid = False
+                    if not valid:
+                        raise ValueError('Invalid native animation event')
+        if 'preferredAnimations' in model:
+            preferred = model['preferredAnimations']
+            if (not isinstance(preferred, list) or any(not isinstance(name, str) or name not in ids for name in preferred)
+                    or len(preferred) != len(set(preferred))):
+                raise ValueError('Invalid preferred animation list')
         if 'interactions' in model:
             profile = model['interactions']
-            if (catalogue['schemaVersion'] != 3 or not isinstance(profile, dict)
+            if (catalogue['schemaVersion'] not in (3, 4) or not isinstance(profile, dict)
                     or set(profile) not in ({'version', 'clickAnimations'}, {'version', 'clickAnimations', 'dizzyAnimation'})
                     or type(profile.get('version')) is not int or profile['version'] != 1
                     or not isinstance(profile.get('clickAnimations'), list)
@@ -273,26 +312,28 @@ def prepare_model_upload(dist_folder: Path) -> tuple[bytes | None, dict[str, Mod
             raise ValueError('Invalid 3D model identity')
         actor(model, identity=identity)
         if 'additionalActor' in model:
-            if catalogue['schemaVersion'] not in (2, 3):
+            if catalogue['schemaVersion'] not in (2, 3, 4):
                 raise ValueError('3D additional actors require catalogue schema 2')
             additional_actor(model['additionalActor'])
     return data, assets
 
 
-def upload_model_asset(client: 'S3Client', bucket: str, dist_folder: Path, key: str, ref: ModelUploadAsset) -> str:
+def upload_model_asset(client: 'S3Client', bucket: str, dist_folder: Path, key: str, ref: ModelUploadAsset,
+                       *, repair: bool = False) -> str:
     # Check the actual uploaded bytes too, not just the earlier preflight read.
     path = dist_folder/key
     model_dir = (dist_folder/'models/3d').resolve()
     if not model_dir.is_relative_to(dist_folder.resolve()) or not path.resolve().is_relative_to(model_dir):
         raise ValueError('3D resource left the build directory after validation: ' + key)
     data = path.read_bytes()
-    if len(data) != ref['bytes'] or hashlib.sha256(data).hexdigest() != ref['sha256']:
+    if len(data) != ref['bytes']:
         raise ValueError('3D resource changed after validation: ' + key)
     return upload_file(client, bucket, data, key, 'model/gltf-binary',
-                       cache_control=ref['cache_control'], strict=True)
+                       cache_control=ref['cache_control'], strict=True, repair=repair,
+                       expected_sha256=ref['sha256'])
 
 
-def sync(dist_folder: str | Path, bucket: str) -> None:
+def sync(dist_folder: str | Path, bucket: str, *, repair_model_assets: set[str] | None = None) -> None:
     dist_folder = Path(dist_folder)
     model_catalogue, model_assets = prepare_model_upload(dist_folder)
     generate_diff(dist_folder, bucket)
@@ -319,7 +360,8 @@ def sync(dist_folder: str | Path, bucket: str) -> None:
         # Reuse this uploader and executor. Every binary result is observed
         # before a catalogue or root manifest can advertise the new generation.
         # Fixed model keys can already be replaced if another upload fails.
-        model_futures = [executor.submit(upload_model_asset, client, bucket, dist_folder, key, ref)
+        model_futures = [executor.submit(upload_model_asset, client, bucket, dist_folder, key, ref,
+                                         repair=key in (repair_model_assets or ()))
                          for key, ref in model_assets.items()]
         model_error = None
         for future in as_completed(model_futures):
