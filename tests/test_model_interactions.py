@@ -12,7 +12,6 @@ from game_data.model_gen.interactions import prepare_interactions
 from game_data.model_gen.selection import select_native_view
 from game_data.model_gen import generate_models
 from game_data.model_gen.converter.native import NativeInputError
-from game_data.model_associations import _model
 
 
 class Objects(dict):
@@ -188,8 +187,8 @@ class NormalPipeline(unittest.TestCase):
         return catalogue
 
     def test_normal_generation_retains_hidden_meshes_and_source_events(self):
-        self.assertEqual(_model(self.raw/'flag.rk')['meshes'], self.names)
         report = generate_models(self.objects, self.raw, self.dist, self.root/'report.json', campaign={})
+        self.assertEqual(report['models']['flag.rk']['meshes'], self.names)
         catalogue = self.catalogue()
         self.assertEqual(catalogue['schemaVersion'], 4)
         model = catalogue['models']['Synthetic_Flag']

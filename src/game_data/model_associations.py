@@ -1,4 +1,4 @@
-"""Audit native 3D references before enabling automatic GLB generation.
+"""Resolve native 3D declarations before model conversion.
 
 Consumes Luna GameObjectData already owned by Transformer. This is deliberately
 not a converter or a claim that an extracted folder is a complete game release.
@@ -50,23 +50,6 @@ def _file(folder: Path, name: str, name_index: dict[str, list[str]]) -> Path:
 def _sha(path: Path) -> str:
     with path.open('rb') as stream:
         return hashlib.file_digest(stream, 'sha256').hexdigest()
-
-
-def _model(path: Path) -> dict:
-    from luna_kit.model import RKModel
-    from .model_gen.converter.native import _validate_model_layout
-    # Luna assumes required sections exist; reject unsupported layouts per resource.
-    _validate_model_layout(path)
-    model = RKModel(str(path))
-    bones = model.bones
-    if not bones or [b.index for b in bones] != list(range(len(bones))):
-        raise AssociationError('Invalid native bone indices')
-    if any(b.parentIndex < -1 or b.parentIndex >= b.index for b in bones):
-        raise AssociationError('Unsupported or cyclic native hierarchy')
-    return {'bone_count': len(bones), 'parents': [b.parentIndex for b in bones],
-            'bone_names': [b.name for b in bones],
-            'meshes': [m.name for m in model.meshes],
-            'materials': [material.name for material in model.materials]}
 
 
 def _animation(path: Path) -> dict:
@@ -126,8 +109,8 @@ def _parts(outfit: GameObject, parts: dict[str, GameObject]) -> dict[str, dict[s
 def discover_associations(game_objects: GameObjectData, extracted_dir: str | Path) -> dict:
     """Return traceable declarations and blockers; never mark a GLB successful.
 
-    Paths are resolved only from explicit fields. Bone count is a rejection
-    check after association, never a discovery method or proof of retargeting.
+    Paths are resolved only from explicit fields. RK parsing, layout and bone
+    compatibility checks belong to conversion, not this declaration pass.
     External library stem + .anim/.csv follows the inspected native loader;
     see docs/3d-resource-associations.md for evidence and version boundaries.
     """
@@ -145,12 +128,12 @@ def discover_associations(game_objects: GameObjectData, extracted_dir: str | Pat
         except AssociationError as error:
             set_errors[identity] = str(error)
 
-    def inspect(name: str, cache: dict[str, dict], reader: Callable[[Path], dict]) -> dict:
+    def inspect(name: str, cache: dict[str, dict], reader: Callable[[Path], dict] | None = None) -> dict:
         if name not in cache:
             try:
                 path = _file(folder, name, name_index)
-                cache[name] = {'file': name, 'sha256': _sha(path), **reader(path)}
-            except (ValueError, OSError, AssertionError, IndexError, struct.error, ZeroDivisionError) as error:
+                cache[name] = {'file': name, **(reader(path) if reader is not None else {})}
+            except (ValueError, OSError, struct.error) as error:
                 cache[name] = {'file': name, 'error': str(error)}
         if 'error' in cache[name]:
             raise AssociationError(cache[name]['error'])
@@ -161,8 +144,7 @@ def discover_associations(game_objects: GameObjectData, extracted_dir: str | Pat
         if key not in csv_cache:
             try:
                 path = _file(folder, key[0], name_index)
-                csv_cache[key] = {'file': key[0], 'sha256': _sha(path),
-                                 **_clips(path, library['frame_count'])}
+                csv_cache[key] = {'file': key[0], **_clips(path, library['frame_count'])}
             except (ValueError, OSError) as error:
                 csv_cache[key] = {'file': key[0], 'error': str(error)}
         return csv_cache[key]
@@ -180,12 +162,9 @@ def discover_associations(game_objects: GameObjectData, extracted_dir: str | Pat
         try:
             stem = _stem(declaration['Model'])
             actor['resource_stem'] = stem
-            model = inspect(stem + '.rk', model_cache, _model)
+            model = inspect(stem + '.rk', model_cache)
             library = inspect(stem + '.anim', anim_cache, _animation)
             actor['model'], actor['animation'] = model['file'], library['file']
-            if model['bone_count'] != library['bone_count']:
-                raise AssociationError('Additional actor model/ANIM bone counts differ')
-            actor['bone_count_check'] = 'equal; association comes from native loading, not bone counts'
             csv = inspect_csv(stem, library)
             actor['csv'] = {k: v for k, v in csv.items()
                             if k not in {'clips', 'diagnostics', 'excluded_clip_names'}}
@@ -232,13 +211,9 @@ def discover_associations(game_objects: GameObjectData, extracted_dir: str | Pat
                     row['events'] = None
                 model, anim = _stem(model), _stem(anim)
                 row['declaration'] = {'model': model, 'animation': anim}
-                info = inspect(model + '.rk', model_cache, _model)
+                info = inspect(model + '.rk', model_cache)
                 library = inspect(anim + '.anim', anim_cache, _animation)
                 row['model'], row['animation'] = info['file'], library['file']
-                if info['bone_count'] != library['bone_count']:
-                    raise AssociationError('Declared model/ANIM bone counts differ')
-                row['bone_count_check'] = 'equal; ANIM does not provide bone names or hierarchy'
-                row['model_animation_resolved'] = True
                 # The native loader appends .anim and .csv to the same caller
                 # stem. Embedded ANIM names are authoring metadata and can point
                 # to another library; never select that library as a fallback.
@@ -280,12 +255,6 @@ def discover_associations(game_objects: GameObjectData, extracted_dir: str | Pat
             owner = rows[row['owners'][0]]
             if not owner['references_resolved']:
                 raise AssociationError('Outfit owner has unresolved resources')
-            meshes = model_cache[owner['model']]['meshes']
-            # The native mesh-name controller is a no-op for absent names.
-            # Preserve that declaration (including empty-tail parts), never
-            # choose a similarly named mesh or restore the default part.
-            row['absent_declared_meshes'] = sorted({part['mesh'] for part in row['parts'].values()
-                                                   if part['mesh'] not in meshes})
             row['model'], row['animation'] = owner['model'], owner['animation']
             row['csv'] = dict(owner['csv'])
             row['declaration'] = dict(owner['declaration'])
@@ -299,7 +268,6 @@ def discover_associations(game_objects: GameObjectData, extracted_dir: str | Pat
     schema = getattr(game_objects, 'CATEGORY_DATA', {})
     return {'schemaVersion': 1, 'purpose': 'association-audit-only', 'conversion_enabled': False,
             'summary': {'identities': len(rows), 'references_resolved': sum(r['references_resolved'] for r in rows.values()),
-                        'model_animation_resolved': sum(r.get('model_animation_resolved', False) for r in rows.values()),
                         'converted': 0, 'categories': dict(Counter(r['category'] for r in rows.values())),
                         'additional_actors': sum('additional_actor' in r for r in rows.values()),
                         'additional_actor_references_resolved': sum(

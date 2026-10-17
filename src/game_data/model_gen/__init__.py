@@ -17,7 +17,7 @@ from ..model_catalogue import compact_animations
 from ..model_paths import asset_digest, is_asset_path, model_path
 from .converter import ConversionError
 from .converter.export import AssetBundle, convert_native
-from .converter.native import NativeInputError, material_dependency_names
+from .converter.native import NativeInputError, load_model, material_dependency_names
 from .selection import SelectionError, index_event_files, select_native_view
 from .interactions import InteractionError, prepare_interactions
 from .native_emitter import load_native_emitter
@@ -26,6 +26,7 @@ from .additional import prepare_additional_actor, attach_additional_actor
 
 if TYPE_CHECKING:
     from luna_kit.gameobjectdata import GameObjectData
+    from luna_kit.model import RKModel
     from luna_kit.typings import DefaultGameCampaignType
 
 
@@ -140,6 +141,15 @@ def generate_models(native_objects: GameObjectData, extracted_dir: str | Path, d
     catalogue = {'schemaVersion': 1, 'models': {}}
     referenced = {}
     additional_cache = {}
+    def prepare_model(name: str) -> RKModel:
+        model = load_model(folder/name)
+        info = report['models'][name]
+        info.update(meshes=[mesh.name for mesh in model.meshes],
+                    materials=[material.name for material in model.materials])
+        if failed_paths:
+            _check_failed_materials(folder, info, failed_paths)
+        return model
+
     event_files = index_event_files(folder)
     eligible = len(report['identities']) if public_identities is None else len(public_identities)
     if public_identities is not None:
@@ -163,7 +173,7 @@ def generate_models(native_objects: GameObjectData, extracted_dir: str | Path, d
                 source_complete = False
                 try:
                     if not association['references_resolved']:
-                        raise SelectionError('unresolved_association', association.get('error', 'RK/ANIM/CSV validation failed'))
+                        raise SelectionError('unresolved_association', association.get('error', 'Native RK/ANIM/CSV references are unresolved'))
                     if _render_override(campaign, category, identity):
                         raise SelectionError('campaign_visual_override_unverified', 'Visual override merge rules require review')
                     owner_id = association['owner'] if category == 'PonySet' else identity
@@ -171,16 +181,15 @@ def generate_models(native_objects: GameObjectData, extracted_dir: str | Path, d
                     if category == 'PonySet' and _render_override(campaign, selection_category, owner_id):
                         raise SelectionError('campaign_visual_override_unverified', 'Owner visual override requires review')
                     obj = native_objects[selection_category][owner_id]
-                    if failed_paths:
-                        models = [association['model']]
-                        child = report['identities'][owner_id].get('additional_actor', {})
-                        if child.get('model'):
-                            models.append(child['model'])
-                        for name in models:
-                            _check_failed_materials(folder, report['models'][name], failed_paths)
-                    prepared_additional = prepare_additional_actor(obj, report['identities'][owner_id],
-                        report, folder, additional_cache, animation_cache=animation_cache, texture_cache=texture_cache)
                     model_name = association['model']
+                    rk_model = prepare_model(model_name)
+                    child = report['identities'][owner_id].get('additional_actor', {})
+                    child_model = None
+                    if child.get('references_resolved') and child['resource_stem'] not in additional_cache:
+                        child_model = prepare_model(child['model'])
+                    prepared_additional = prepare_additional_actor(obj, report['identities'][owner_id],
+                        report, folder, additional_cache, animation_cache=animation_cache, texture_cache=texture_cache,
+                        rk_model=child_model)
                     selection = select_native_view(selection_category, obj, native_objects,
                         model_stem=association['declaration']['model'] if 'declaration' in association else Path(model_name).stem,
                         mesh_names=list(dict.fromkeys(report['models'][model_name]['meshes'])),
@@ -229,6 +238,7 @@ def generate_models(native_objects: GameObjectData, extracted_dir: str | Path, d
                         folder/association['csv']['file'], selection['clip_names'], identity=identity,
                         model_filename=identity, animation_filenames=True,
                         animation_cache=animation_cache, texture_cache=texture_cache,
+                        rk_model=rk_model,
                         visible_meshes=selection['visible_meshes'], rest_name=selection['rest_name'],
                         rest_frame=selection.get('rest_frame'), event_path=selection['event_path'],
                         events_absent=selection.get('events_absent', False),

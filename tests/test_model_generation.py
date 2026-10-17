@@ -13,6 +13,7 @@ from native_fixture import copy_rk_with_material, write_fixture, write_native_ta
 from game_data import model_gen
 from game_data.model_catalogue import animation_assets, resolve_animation
 from luna_kit.gameobjectdata import GameObjectData
+from luna_kit.model import RKModel
 
 
 class ModelGeneration(unittest.TestCase):
@@ -56,6 +57,29 @@ class ModelGeneration(unittest.TestCase):
                 self.assertEqual(ref['rigKey'], model['rigKey'])
         return catalogue
 
+    def test_selected_model_is_read_once_without_discovery_hashing(self):
+        (self.native/'unused.rk').write_bytes((self.native/'flag.rk').read_bytes())
+        self.objects = write_native_tables(self.native, {
+            'Synthetic_Flag': {'model': 'flag', 'animation': 'flag', 'events': 'flag'},
+            'Synthetic_Unused': {'model': 'unused', 'animation': 'flag', 'events': 'flag'},
+        })
+        reads = []
+        original_read = RKModel.read
+        def read(model, path):
+            reads.append(Path(path).name)
+            return original_read(model, path)
+        from game_data import model_associations
+        original_sha = model_associations._sha
+        hashes = []
+        def digest(path):
+            hashes.append(path.suffix)
+            return original_sha(path)
+        with patch.object(RKModel, 'read', read), patch.object(model_associations, '_sha', digest):
+            self.generate(public_identities={'Synthetic_Flag'})
+        self.assertEqual(set(self.assert_closed()['models']), {'Synthetic_Flag'})
+        self.assertEqual(reads, ['flag.rk'])
+        self.assertFalse({'.rk', '.anim', '.csv'} & set(hashes))
+
     def test_missing_rk_attributes_excludes_only_the_affected_identity(self):
         data = bytearray((self.native/'flag.rk').read_bytes())
         offset = next(80 + index * 16 for index in range(24)
@@ -74,8 +98,27 @@ class ModelGeneration(unittest.TestCase):
         self.assertEqual(set(report['generation']['excluded']), {'Synthetic_Broken'})
         self.assertIn('Unsupported RK section layout: 13',
                       report['generation']['excluded']['Synthetic_Broken']['reason'])
-        self.assertFalse(report['identities']['Synthetic_Broken']['references_resolved'])
+        # Discovery resolves filenames; conversion validates the RK contents.
+        self.assertTrue(report['identities']['Synthetic_Broken']['references_resolved'])
+        self.assertFalse(report['identities']['Synthetic_Broken']['converted'])
         self.assertTrue(report['identities']['Synthetic_Flag']['converted'])
+
+    def test_luna_parse_error_excludes_only_the_affected_identity(self):
+        (self.native/'broken.rk').write_bytes((self.native/'flag.rk').read_bytes())
+        self.objects = write_native_tables(self.native, {
+            'Synthetic_Broken': {'model': 'broken', 'animation': 'flag', 'events': 'flag'},
+            'Synthetic_Flag': {'model': 'flag', 'animation': 'flag', 'events': 'flag'},
+        })
+        original_read = RKModel.read
+        def read(model, path):
+            if Path(path).name == 'broken.rk':
+                raise IndexError('malformed native record')
+            return original_read(model, path)
+        with patch.object(RKModel, 'read', read):
+            report = self.generate()
+        self.assertEqual(set(self.assert_closed()['models']), {'Synthetic_Flag'})
+        self.assertEqual(set(report['generation']['excluded']), {'Synthetic_Broken'})
+        self.assertIn('malformed native record', report['generation']['excluded']['Synthetic_Broken']['reason'])
 
     def prepare_wardrobe(self, *, linked_tail=True, second_owner=False):
         """Self-authored, distinct native meshes plus real Luna-parsed tables."""
@@ -348,6 +391,9 @@ class ModelGeneration(unittest.TestCase):
                          {'Body':'body1', 'Mane':'mane0', 'Tail':'tail1'})
         self.assertEqual(self.catalogue()['models']['Synthetic_Flag']['animations'],
                          self.catalogue()['models']['Synthetic_Outfit']['animations'])
+        outfit = self.catalogue()['models']['Synthetic_Outfit']
+        self.generate(public_identities={'Synthetic_Outfit'})
+        self.assertEqual(self.assert_closed()['models'], {'Synthetic_Outfit': outfit})
 
 
 if __name__ == '__main__':

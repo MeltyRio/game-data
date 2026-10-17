@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Collection, TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from luna_kit.model import RKModel
     from .texture_cache import TextureCache
     from .animation_cache import AnimationCache
 
@@ -120,6 +121,22 @@ def _validate_model_layout(path: Path) -> None:
     uv = [row for row in uv if row[0] in (1026, 1030)]
     if len(uv) != 1 or uv[0][1] < 12 or uv[0][1] + (8 if uv[0][0] == 1026 else 4) > vertices[2] // vertices[1]:
         raise NativeInputError("Unsupported RK position/UV layout")
+
+
+def load_model(path: str | Path) -> RKModel:
+    """Read one RK for both native appearance selection and conversion."""
+    from luna_kit.model import RKModel
+
+    _validate_model_layout(Path(path))
+    try:
+        model = RKModel(str(path))
+    except (ValueError, AssertionError, IndexError, struct.error, ZeroDivisionError) as error:
+        raise NativeInputError(f'RK parse failed: {Path(path).name}: {error}') from error
+    if [bone.index for bone in model.bones] != list(range(len(model.bones))):
+        raise NativeInputError('Non-contiguous native bone indices')
+    if any(bone.parentIndex >= bone.index or bone.parentIndex < -1 for bone in model.bones):
+        raise NativeInputError('Unsupported or cyclic bone hierarchy')
+    return model
 
 
 def _rkm_fields(path: Path) -> dict[str, str]:
@@ -314,6 +331,7 @@ def load_native(
     event_approvals: dict[str, list[str]] | None = None,
     texture_cache: TextureCache | None = None,
     animation_cache: AnimationCache | None = None,
+    rk_model: RKModel | None = None,
 ) -> dict:
     """Read native files without axis changes, retargeting, or visibility guesses.
 
@@ -334,13 +352,13 @@ def load_native(
     CSV intervals using the native last-frame rule, retaining declared duration.
     Its per-clip and total joint-frame export budgets are checked before expansion.
     The default remains strict rejection; the caller establishes controller scope.
-    The caller
+    ``rk_model`` may reuse the result of ``load_model(rk_path)`` from appearance
+    selection within the same conversion. It is not modified here. The caller
     must not supply a task/actor uniform override; those controllers are not
     represented by a standalone skeletal clip.
     """
     import numpy as np
     try:
-        from luna_kit.model import RKModel
         from luna_kit.model.rk import parse_rkm
         from luna_kit.pvr import PVR
         from luna_kit.utils import image_has_alpha, put_alpha
@@ -359,15 +377,10 @@ def load_native(
         raise NativeInputError(str(error)) from error
     major, minor, frame_type = animation.header.major, animation.header.minor, animation.header.frame_type
     frames = animation.header.frame_count
-    _validate_model_layout(rk_path)
-    model = RKModel(str(rk_path))
+    model = rk_model if rk_model is not None else load_model(rk_path)
     if len(model.bones) != animation.header.bone_count:
         raise NativeInputError("Model and animation bone counts differ")
-    if [bone.index for bone in model.bones] != list(range(len(model.bones))):
-        raise NativeInputError("Non-contiguous native bone indices")
     for bone in model.bones:
-        if bone.parentIndex >= bone.index or bone.parentIndex < -1:
-            raise NativeInputError("Unsupported or cyclic bone hierarchy")
         matrix = np.asarray(bone.matrix_4x4, dtype=np.float64)
         if not np.isfinite(matrix).all() or abs(np.linalg.det(matrix)) < 1e-12:
             raise NativeInputError(f"Invalid bind matrix: {bone.name}")

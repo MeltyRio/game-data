@@ -51,8 +51,11 @@ references are uploaded.
 
 ## Responsibilities
 
-- `model_associations.py`: follow explicit object references, validate source
-  dependencies, audit shared libraries, outfit ownership and attached actors.
+- `model_associations.py`: resolve explicit resource filenames, shared CSV
+  libraries, outfit ownership and attached actors. It does not decode RK models
+  or hash resource files. Each selected RK is read and validated once, immediately
+  before appearance selection, and reused by conversion. Bone compatibility and
+  material checks remain in conversion; cache and output digests are unchanged.
 - `model_gen/selection.py`: choose a documented initial viewer pose, exact
   visible meshes and native preferred actions.
 - `model_gen/interactions.py`: evaluate the associated library and compile each
@@ -459,9 +462,9 @@ excludes that model. Fixed model URLs, cache revalidation and non-atomic upload
 semantics are unchanged. An older catalogue/new overwritten file remains a
 digest failure rather than a silently accepted mismatched model.
 
-`model_animation_resolved` means an explicit RK/ANIM pair passed structural
-checks. `references_resolved` additionally requires usable CSV references (and
-resolved outfit ownership); it does not mean renderable. `converted` records
+`references_resolved` means explicit resource files and usable CSV references
+were found (with resolved outfit ownership); it does not mean that the RK contents
+or bone compatibility have been validated. `converted` records
 successful local bundle generation. `generation.excluded` is the final per-ID
 failure list. The separate `summary.discovery_blockers` is an unchanged snapshot
 of the earlier association audit and must not be read as final rendering coverage.

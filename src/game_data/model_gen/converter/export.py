@@ -3,12 +3,16 @@ from collections.abc import Collection
 from dataclasses import dataclass
 import hashlib
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from . import ConversionError, from_native, model_glb, animation_glb
 from .native import NativeInputError, load_native
 from .animation_cache import AnimationCache
 from .texture_cache import TextureCache
 from ...model_paths import asset_path, model_path, safe_asset_name
+
+if TYPE_CHECKING:
+    from luna_kit.model import RKModel
 
 
 @dataclass(frozen=True)
@@ -30,7 +34,8 @@ def convert_native(rk_path: str | Path, anim_path: str | Path, csv_path: str | P
                    event_approvals: dict[str, list[str]] | None = None,
                    interaction_effects: dict[str, dict] | None = None,
                    animation_cache: AnimationCache | None = None,
-                   texture_cache: TextureCache | None = None) -> AssetBundle:
+                   texture_cache: TextureCache | None = None,
+                   rk_model: RKModel | None = None) -> AssetBundle:
     """Convert one explicit source association; all texture data stays in GLB.
 
     Mesh, rest and event-source arguments have the same meaning as in
@@ -50,7 +55,8 @@ def convert_native(rk_path: str | Path, anim_path: str | Path, csv_path: str | P
                          rest_name=rest_name, rest_frame=rest_frame,
                          event_path=event_path, events_absent=events_absent, user_vector=user_vector,
                          frame_boundary=frame_boundary, additional_event_paths=additional_event_paths,
-                         retained_meshes=retained_meshes, event_approvals=event_approvals, animation_cache=animation_cache, texture_cache=texture_cache)
+                         retained_meshes=retained_meshes, event_approvals=event_approvals,
+                         animation_cache=animation_cache, texture_cache=texture_cache, rk_model=rk_model)
     model, clips = from_native(native, identity=identity, include_clips=animation_cache is None)
     if interactions is not None:
         if model_interactions is None or retained_meshes is None:

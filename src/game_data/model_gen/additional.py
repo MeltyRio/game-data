@@ -23,6 +23,7 @@ from .selection import SelectionError
 
 if TYPE_CHECKING:
     from luna_kit.gameobjectdata import GameObject
+    from luna_kit.model import RKModel
     from .converter.export import AssetBundle
 
 
@@ -39,7 +40,8 @@ def _require(condition: object, detail: str) -> None:
 def prepare_additional_actor(obj: GameObject, owner_association: dict, report: dict, folder: Path,
                              cache: dict[str, tuple[AssetBundle, dict]], *,
                              animation_cache: AnimationCache | None = None,
-                             texture_cache: TextureCache | None = None) -> tuple[AssetBundle, dict] | None:
+                             texture_cache: TextureCache | None = None,
+                             rk_model: RKModel | None = None) -> tuple[AssetBundle, dict] | None:
     """Validate the entire numeric-index child library before permitting it.
 
     Cache ownership is one generate_models call. An excluded owner never writes
@@ -79,7 +81,8 @@ def prepare_additional_actor(obj: GameObject, owner_association: dict, report: d
             folder/source['csv']['file'], [clip['name'] for clip in clips], identity=identity,
             visible_meshes=report['models'][source['model']]['meshes'],
             rest_name=clips[0]['name'], events_absent=True, frame_boundary='native-clamp',
-            animation_filenames=True, animation_cache=animation_cache, texture_cache=texture_cache)
+            animation_filenames=True, animation_cache=animation_cache, texture_cache=texture_cache,
+            rk_model=rk_model)
         _require([row['id'] for row in bundle.catalogue['models'][identity]['animations']]
                  == [clip['name'] for clip in clips],
                  'AdditionalObject requires every original CSV animation in its original order')
