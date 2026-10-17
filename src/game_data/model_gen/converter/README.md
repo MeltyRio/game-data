@@ -121,17 +121,12 @@ malformed, unreadable, non-file or escaped paths are errors. A missing file in
 an incomplete or failed extraction is not proof of native absence. The original
 first-material RKM required for the separately reviewed hair clock stays strict.
 
-The RK section guard validates bounds and layouts before passing bytes to Luna.
-Accepted header pairs are 5.0, 5.1, 5.2 and 6.2 with the checked section layouts;
-this is not a promise to accept arbitrary files with those header values. Luna
-reads face data sequentially, so non-contiguous face ranges are rejected.
-
-At the current lock (`f36858db203b4650079ec1f9e9614cc0dd43441d`),
-Luna's RK magic and face-width checks are Python assertions; it does not check
-version, duplicate section tags, submesh offsets or matching section counts.
-Its ANIM reader does not check version, declared frame type or trailing bytes.
-The adapter's explicit checks therefore remain necessary, including under
-`python -O`; successful Luna decoding alone does not establish these guarantees.
+The locked Luna RK reader validates binary section bounds, record sizes and
+references, and reads each submesh at its declared face-index offset. Appearance
+selection and conversion reuse that parsed model. The converter checks its own
+requirements: supported header pairs (5.0, 5.1, 5.2 and 6.2), geometry, skinning,
+one supported UV attribute and a supported bone hierarchy. These are conversion
+limits, not a claim that Luna cannot read other valid RK models.
 
 ANIM 5.2 retains the converter's strict little-endian type 0/1/4 handling:
 
@@ -142,9 +137,11 @@ ANIM 5.2 retains the converter's strict little-endian type 0/1/4 handling:
 - Type 4, 11 bytes: XYZ int16 translation times 0.031250953674316406, W int16
   divided by 32767, XYZ int8 divided by 127.
 
-Payload length, finite values and quaternion validity are checked. The current
-Luna animation reader assumes the type 4 record size and does not dispatch on
-`frame_type`; replacing this decoder with it would lose type 0/1 support.
+Payload length, finite values and quaternion validity are checked. The locked
+Luna animation reader rejects frame types other than 4 and truncated records.
+It retains a different type-4 translation scale (`1/32`) and accepts trailing
+bytes; replacing this decoder with it would change values and lose type 0/1
+support. The converter retains its supported version and exact-length checks.
 The retained decoder is a narrow format adaptation, not a separate archive or
 game-data pipeline. Type 4's packed layout is checked against Luna's reader;
 types 0/1 have synthetic byte-record tests and preserve the previously reviewed

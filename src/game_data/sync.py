@@ -364,7 +364,7 @@ def sync(dist_folder: str | Path, bucket: str, *, repair_model_assets: set[str] 
                                          repair=key in (repair_model_assets or ()))
                          for key, ref in model_assets.items()]
         model_error = None
-        for future in as_completed(model_futures):
+        for future in track(as_completed(model_futures), total=len(model_futures), description='Uploading 3D...'):
             try:
                 future.result()
             except Exception as error:

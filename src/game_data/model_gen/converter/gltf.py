@@ -158,7 +158,7 @@ def model_glb(model: Model) -> bytes:
         if 'native_mesh_index' in p: provenance['nativeMeshIndex'] = p['native_mesh_index']
         material_index = int(p['material'])
         primitives.append({'attributes': attributes, 'indices': accessor, 'material': material_index, 'mode': 4, 'extras': provenance})
-    require(primitives and model.materials, 'No visible geometry/materials')
+    require(bool(primitives and model.materials), 'No visible geometry/materials')
     # glTF MAT4 accessors are column-major.
     inverse = np.linalg.inv(model.bind_global).transpose(0,2,1).reshape(bone_count,16)
     g.document['skins'] = [{'joints': list(range(1,bone_count+1)), 'inverseBindMatrices': g.accessor(inverse,'MAT4'), 'skeleton': 0}]

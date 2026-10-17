@@ -15,9 +15,13 @@ import threading
 from types import SimpleNamespace
 from typing import Literal
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
+
+from rich.console import Console
+from rich.progress import Progress as RichProgress
 
 from bootstrap import ROOT
+from game_data.console import track
 from game_data.model_catalogue import compact_animations, animation_assets, resolve_animation
 from game_data.model_paths import is_asset_path, asset_path_matches, model_path, safe_asset_name
 
@@ -89,7 +93,7 @@ def load_sync(client):
     assert len(functions) == len(names)
     context = {'animation_assets': animation_assets, 'resolve_animation': resolve_animation, 'safe_asset_name': safe_asset_name, 'is_asset_path': is_asset_path, 'model_path': model_path, 'asset_path_matches': asset_path_matches, 'hashlib': hashlib, 'json': json, 'math': math, 'mimetypes': mimetypes,
         'Path': Path, 're': re, 'Literal': Literal, 'ThreadPoolExecutor': ThreadPoolExecutor,
-        'as_completed': as_completed, 'Progress': Progress, 'MAX_WORKERS': 3,
+        'as_completed': as_completed, 'Progress': Progress, 'track': track, 'MAX_WORKERS': 3,
         'HEADERS_TO_CHECK': ['CacheControl', 'ContentType'], 'COLUMNS': [],
         'botocore': SimpleNamespace(exceptions=SimpleNamespace(ClientError=ClientError)),
         'console': Mock(), 'DEFAULT_BUCKET': 'must-not-be-used',
@@ -213,6 +217,21 @@ class ModelSync(unittest.TestCase):
         manifest = json.loads(self.client.objects[self.bucket, 'manifest.json']['Body'])
         self.assertEqual(manifest['models_3d.json'], hashlib.sha256(remote_catalogue).hexdigest())
         self.assertNotIn(b'\n', remote_catalogue)
+
+    def test_model_upload_progress_counts_completed_assets(self):
+        displays = []
+        def progress(*args, **kwargs):
+            display = RichProgress(*args, console=Console(file=io.StringIO()), auto_refresh=False)
+            displays.append(display)
+            return display
+
+        with patch('game_data.console.Progress', side_effect=progress):
+            self.run_sync()
+
+        tasks = [task for display in displays for task in display.tasks]
+        self.assertEqual([(task.completed, task.total) for task in tasks], [(2, 2)])
+        self.assertIn((self.bucket, self.model['path']), self.client.objects)
+        self.assertIn((self.bucket, self.animation['path']), self.client.objects)
 
 
     def test_missing_asset_stops_before_any_cloud_call(self):

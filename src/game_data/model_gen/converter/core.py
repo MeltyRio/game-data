@@ -16,7 +16,7 @@ class ConversionError(ValueError):
     pass
 
 
-def require(condition, message):
+def require(condition: bool | np.bool_, message: str) -> None:
     if not condition:
         raise ConversionError(message)
 

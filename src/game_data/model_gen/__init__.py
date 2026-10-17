@@ -1,5 +1,6 @@
 """Generate the optional 3D catalogue inside the existing game-data build."""
 from collections.abc import Collection, Iterable
+from functools import lru_cache
 import hashlib
 import json
 from pathlib import Path
@@ -141,8 +142,17 @@ def generate_models(native_objects: GameObjectData, extracted_dir: str | Path, d
     catalogue = {'schemaVersion': 1, 'models': {}}
     referenced = {}
     additional_cache = {}
+    @lru_cache(maxsize=1)
+    def read_model(path: Path, digest: str) -> RKModel:
+        # Adjacent identities can share a large RK; retain only the last parse.
+        model = load_model(path)
+        if animation_cache.digest(path) != digest:
+            raise NativeInputError('Native model changed during parsing')
+        return model
+
     def prepare_model(name: str) -> RKModel:
-        model = load_model(folder/name)
+        path = (folder/name).resolve()
+        model = read_model(path, animation_cache.digest(path))
         info = report['models'][name]
         info.update(meshes=[mesh.name for mesh in model.meshes],
                     materials=[material.name for material in model.materials])

@@ -57,10 +57,11 @@ class ModelGeneration(unittest.TestCase):
                 self.assertEqual(ref['rigKey'], model['rigKey'])
         return catalogue
 
-    def test_selected_model_is_read_once_without_discovery_hashing(self):
+    def test_selected_models_reuse_unchanged_rk_without_discovery_hashing(self):
         (self.native/'unused.rk').write_bytes((self.native/'flag.rk').read_bytes())
         self.objects = write_native_tables(self.native, {
             'Synthetic_Flag': {'model': 'flag', 'animation': 'flag', 'events': 'flag'},
+            'Synthetic_Shared': {'model': 'flag', 'animation': 'flag', 'events': 'flag'},
             'Synthetic_Unused': {'model': 'unused', 'animation': 'flag', 'events': 'flag'},
         })
         reads = []
@@ -75,10 +76,60 @@ class ModelGeneration(unittest.TestCase):
             hashes.append(path.suffix)
             return original_sha(path)
         with patch.object(RKModel, 'read', read), patch.object(model_associations, '_sha', digest):
-            self.generate(public_identities={'Synthetic_Flag'})
-        self.assertEqual(set(self.assert_closed()['models']), {'Synthetic_Flag'})
+            self.generate(public_identities={'Synthetic_Flag', 'Synthetic_Shared'})
+        self.assertEqual(set(self.assert_closed()['models']), {'Synthetic_Flag', 'Synthetic_Shared'})
         self.assertEqual(reads, ['flag.rk'])
         self.assertFalse({'.rk', '.anim', '.csv'} & set(hashes))
+
+    def test_rk_reuse_refreshes_changed_source_and_each_build(self):
+        self.objects = write_native_tables(self.native, {
+            'Synthetic_First': {'model': 'flag', 'animation': 'flag', 'events': 'flag'},
+            'Synthetic_Second': {'model': 'flag', 'animation': 'flag', 'events': 'flag'},
+        })
+        original_convert = model_gen.convert_native
+        original_load = model_gen.load_model
+        positions = []
+        def load(path):
+            model = original_load(path)
+            positions.append(model.verts[0].pos.x)
+            return model
+        def convert(*args, **kwargs):
+            bundle = original_convert(*args, **kwargs)
+            if kwargs['identity'] == 'Synthetic_First':
+                path = self.native/'flag.rk'
+                data = bytearray(path.read_bytes())
+                offset = next(struct.unpack_from('<4I', data, 80 + i * 16)[1]
+                              for i in range(24) if struct.unpack_from('<I', data, 80 + i * 16)[0] == 3)
+                value, = struct.unpack_from('<f', data, offset)
+                struct.pack_into('<f', data, offset, value + .5)
+                path.write_bytes(data)
+            return bundle
+        with patch.object(model_gen, 'load_model', load), patch.object(model_gen, 'convert_native', convert):
+            self.generate()
+        self.assertEqual(len(positions), 2)
+        self.assertEqual(positions[1], positions[0] + .5)
+        self.assertEqual(set(self.assert_closed()['models']), {'Synthetic_First', 'Synthetic_Second'})
+        with patch.object(model_gen, 'load_model', load):
+            self.generate()
+        self.assertEqual(positions, [positions[0], positions[0] + .5, positions[0] + .5])
+
+    def test_rk_changed_while_parsing_is_not_reused(self):
+        self.objects = write_native_tables(self.native, {
+            'Synthetic_First': {'model': 'flag', 'animation': 'flag', 'events': 'flag'},
+            'Synthetic_Second': {'model': 'flag', 'animation': 'flag', 'events': 'flag'},
+        })
+        original_load = model_gen.load_model
+        def load(path):
+            model = original_load(path)
+            if model.name == 'Synthetic flag':
+                data = bytearray(path.read_bytes())
+                data[16:80] = b'Changed'.ljust(64, b'\0')
+                path.write_bytes(data)
+            return model
+        with patch.object(model_gen, 'load_model', load):
+            report = self.generate()
+        self.assertEqual(set(self.assert_closed()['models']), {'Synthetic_Second'})
+        self.assertIn('changed during parsing', report['generation']['excluded']['Synthetic_First']['reason'])
 
     def test_missing_rk_attributes_excludes_only_the_affected_identity(self):
         data = bytearray((self.native/'flag.rk').read_bytes())
