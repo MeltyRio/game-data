@@ -70,56 +70,19 @@ def _material_sibling(folder: Path, name: str, *, allow_missing=False) -> Path |
     raise NativeInputError(f"Missing native dependency: {name}.rkm")
 
 
-def _validate_model_layout(path: Path) -> None:
-    """Validate the section layouts understood by the current Luna reader."""
-    raw = path.read_bytes()
-    if len(raw) < 80 + 24 * 16:
-        raise NativeInputError("Truncated RK model header")
-    magic, major, minor = struct.unpack_from("<8sII", raw)
-    if magic != b"RKFORMAT" or (major, minor) not in {(5, 0), (5, 1), (5, 2), (6, 2)}:
+def _validate_model_layout(model: RKModel) -> None:
+    """Check converter requirements; Luna validates the binary layout."""
+    if (model.header.unknown1, model.header.unknown2) not in {(5, 0), (5, 1), (5, 2), (6, 2)}:
         raise NativeInputError("Unsupported RK model version")
-    sections = {}
-    for index in range(24):
-        tag, offset, count, size = struct.unpack_from("<4I", raw, 80 + index * 16)
-        if not tag:
-            continue
-        if tag in sections or (count and (offset < 80 + 24 * 16 or offset + size > len(raw))):
-            raise NativeInputError("Invalid RK section bounds or duplicate tag")
-        sections[tag] = (offset, count, size)
-    def section(tag: int, stride: int | None = None) -> tuple[int, int, int]:
-        item = sections.get(tag)
-        if item is None or not item[1] or item[2] % item[1] or (stride and item[2] != item[1] * stride):
+    # Luna also reads unskinned/empty models; this exporter needs geometry,
+    # materials, named submeshes, skinning and one supported UV attribute.
+    for tag in (1, 2, 3, 4, 7, 13, 16, 17):
+        section = model.section_headers.get(tag)
+        if section is None or not section.count:
             raise NativeInputError(f"Unsupported RK section layout: {tag}")
-        return item
-    vertices = section(3)
-    submeshes = section(1, 16)
-    materials = section(2)  # Material names use the section-declared stride, not a fixed width.
-    names = section(16, 64)
-    if names[1] != submeshes[1]:
-        raise NativeInputError("RK submesh/name counts differ")
-    section(7, 140)
-    weights = section(17, 12)
-    if weights[1] != vertices[1]:
-        raise NativeInputError("RK vertex/weight counts differ")
-    faces = section(4)
-    if faces[2] // faces[1] not in (2, 4) or faces[1] % 3:
+    if model.section_headers[4].count % 3:
         raise NativeInputError("Unsupported RK face index layout")
-    # Luna reads faces sequentially, so check each declared range before it can
-    # read beyond the face section or attach another submesh's triangles.
-    next_index = 0
-    for index in range(submeshes[1]):
-        triangles, offset, material, _ = struct.unpack_from('<4I', raw, submeshes[0] + index * 16)
-        if material >= materials[1]:
-            raise NativeInputError("Native submesh material index is out of range")
-        if offset != next_index:
-            raise NativeInputError("Non-contiguous native face layout is unsupported by the Luna parser")
-        next_index = offset + triangles * 3
-        if next_index > faces[1]:
-            raise NativeInputError("Native submesh face range exceeds its declared section")
-    attributes = section(13, 4)
-    uv = [struct.unpack_from("<HBB", raw, attributes[0] + i * 4) for i in range(attributes[1])]
-    uv = [row for row in uv if row[0] in (1026, 1030)]
-    if len(uv) != 1 or uv[0][1] < 12 or uv[0][1] + (8 if uv[0][0] == 1026 else 4) > vertices[2] // vertices[1]:
+    if sum(attribute[0] in (1026, 1030) for attribute in model.attributes) != 1:
         raise NativeInputError("Unsupported RK position/UV layout")
 
 
@@ -127,11 +90,11 @@ def load_model(path: str | Path) -> RKModel:
     """Read one RK for both native appearance selection and conversion."""
     from luna_kit.model import RKModel
 
-    _validate_model_layout(Path(path))
     try:
         model = RKModel(str(path))
     except (ValueError, AssertionError, IndexError, struct.error, ZeroDivisionError) as error:
         raise NativeInputError(f'RK parse failed: {Path(path).name}: {error}') from error
+    _validate_model_layout(model)
     if [bone.index for bone in model.bones] != list(range(len(model.bones))):
         raise NativeInputError('Non-contiguous native bone indices')
     if any(bone.parentIndex >= bone.index or bone.parentIndex < -1 for bone in model.bones):
@@ -261,10 +224,11 @@ def _verify_event_source(event_path: str | Path | None, events_absent: bool, nam
     for animation_list in root.iter("AnimationList"):
         if any(node.tag != "Animation" for node in animation_list):
             raise NativeInputError("Unsupported native animation declaration")
-    from ..interactions import read_events
+    from ..interactions import parse_events
     from ..visibility import compile_subobject_event
-    controls = read_events(path)['controls'] if event_approvals is not None else {}
-    approved = (event_approvals or {}).get(hashlib.sha256(raw).hexdigest(), [])
+    controls = parse_events(root)['controls'] if event_approvals is not None else {}
+    digest = hashlib.sha256(raw).hexdigest()
+    approved = (event_approvals or {}).get(digest, [])
     for node in root.iter("Animation"):
         if node.get("Name") in names and set(node.attrib) != {"Name"}:
             raise NativeInputError("Unsupported selected native animation attributes")
@@ -291,7 +255,7 @@ def _verify_event_source(event_path: str | Path | None, events_absent: bool, nam
                         raise NativeInputError('Duplicate native event in one animation declaration')
                     declaration_events.append(key)
     evidence = {"status": "parsed-source-xml", "name": path.name,
-                "sha256": hashlib.sha256(raw).hexdigest(), "checked_clips": sorted(names)}
+                "sha256": digest, "checked_clips": sorted(names)}
     if event_approvals is not None:
         mapped = {}
         for node in root.iter('Animation'):

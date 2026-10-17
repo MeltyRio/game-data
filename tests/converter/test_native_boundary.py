@@ -1,10 +1,13 @@
 """Explicit native sampler policy; source files and CSV timing are never repaired."""
 from pathlib import Path
+import builtins
+import io
 import struct
 import tempfile
 import unittest
+from unittest.mock import patch
 
-from game_data.model_gen.converter.native import NativeInputError, load_native
+from game_data.model_gen.converter.native import NativeInputError, load_model, load_native
 from game_data.model_gen.converter.export import convert_native
 from native_fixture import write_fixture
 
@@ -47,6 +50,51 @@ class NativeBoundaryTests(unittest.TestCase):
         path.write_bytes(raw)
         with self.assertRaisesRegex(NativeInputError, 'material index.*range'):
             self.load(['wave'])
+
+    def test_rk_is_opened_once_for_parsing_and_validation(self):
+        path = self.folder/'flag.rk'
+        with patch('builtins.open', wraps=builtins.open) as opened, patch('io.open', wraps=io.open) as io_opened:
+            model = load_model(path)
+        reads = [call for call in [*opened.call_args_list, *io_opened.call_args_list]
+                 if str(call.args[0]) == str(path)]
+        self.assertEqual(len(reads), 1)
+        self.assertEqual([mesh.name for mesh in model.meshes], ['flag'])
+
+    def test_rk_uses_lunas_declared_face_offsets(self):
+        path = self.folder/'flag.rk'
+        raw = bytearray(path.read_bytes())
+        offset = next(offset for tag, offset, _, _ in
+                      struct.iter_unpack('<4I', raw[80:464]) if tag == 1)
+        struct.pack_into('<2I', raw, offset, 1, 3)
+        path.write_bytes(raw)
+        native = self.load(['wave'])
+        self.assertEqual(native['primitives'][0]['indices'].tolist(), [[1, 3, 2]])
+
+    def test_converter_keeps_version_skin_and_uv_requirements(self):
+        path = self.folder/'flag.rk'
+        valid = path.read_bytes()
+        cases = []
+        raw = bytearray(valid)
+        struct.pack_into('<I', raw, 8, 99)
+        cases.append((raw, 'version'))
+        for tag in (7, 13, 17):
+            raw = bytearray(valid)
+            header = next(80 + i * 16 for i in range(24)
+                          if struct.unpack_from('<I', raw, 80 + i * 16)[0] == tag)
+            struct.pack_into('<4I', raw, header, 0, 0, 0, 0)
+            cases.append((raw, f'section layout: {tag}'))
+        attributes = next(80 + i * 16 for i in range(24)
+                          if struct.unpack_from('<I', valid, 80 + i * 16)[0] == 13)
+        for entries in ([0], [1026, 1026]):
+            raw = bytearray(valid)
+            struct.pack_into('<4I', raw, attributes, 13, len(raw), len(entries), len(entries) * 4)
+            raw.extend(b''.join(struct.pack('<HBB', code, 12, 0) for code in entries))
+            cases.append((raw, 'UV layout'))
+        for raw, reason in cases:
+            with self.subTest(reason=reason):
+                path.write_bytes(raw)
+                with self.assertRaisesRegex(NativeInputError, reason):
+                    load_model(path)
 
     def test_tail_export_keeps_original_declared_duration_and_input_bytes(self):
         self.csv.write_text('rest,0,0,15\ntail,46,126,15\n')

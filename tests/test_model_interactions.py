@@ -5,13 +5,14 @@ from pathlib import Path
 import struct
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from bootstrap import ROOT
 from native_fixture import write_fixture, write_native_tables
 from game_data.model_gen.interactions import prepare_interactions
 from game_data.model_gen.selection import select_native_view
 from game_data.model_gen import generate_models
-from game_data.model_gen.converter.native import NativeInputError
+from game_data.model_gen.converter.native import NativeInputError, _verify_event_source
 
 
 class Objects(dict):
@@ -102,6 +103,12 @@ class NativeControls(unittest.TestCase):
             {'frame': 3, 'type': 'SubObject', 'meshes': [6, 7], 'visible': False}])
         self.assertIn('hat', result['retained_meshes'])
         self.assertNotIn('hat', result['visible_meshes'])
+        read_bytes = Path.read_bytes
+        with patch.object(Path, 'read_bytes', autospec=True, side_effect=read_bytes) as reads:
+            verified, _ = _verify_event_source(self.path, False, {'wave'}, result['event_approvals'],
+                                               model_stem='body', mesh_names=self.names)
+        self.assertEqual(reads.call_count, 1)
+        self.assertEqual(verified['approved_events']['wave'], result['animation_events']['wave'])
 
     def test_subobject_missing_model_id_mesh_or_conflicting_event_excludes_whole_clip(self):
         self.names += ['hat']

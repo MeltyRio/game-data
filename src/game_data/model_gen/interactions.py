@@ -55,6 +55,11 @@ def read_events(path: Path) -> dict:
         raise InteractionError('DTD/entity declarations are unsupported')
     text = re.sub(r'^\s*<\?xml[^>]*\?>', '', text)
     root = ET.fromstring('<Events>' + text + '</Events>')
+    return {'sha256': hashlib.sha256(raw).hexdigest(), **parse_events(root)}
+
+
+def parse_events(root: ET.Element) -> dict:
+    """Validate and collect records from an already parsed native document."""
     if any(node.tag not in {'MeshList', 'AnimationList'} or node.attrib for node in root):
         raise InteractionError('Unsupported event XML structure')
     result, controls = {}, {}
@@ -94,7 +99,7 @@ def read_events(path: Path) -> dict:
                         # the same callback; merge only across declarations.
                         if row not in rows:
                             rows.append(row)
-    return {'sha256': hashlib.sha256(raw).hexdigest(), 'animations': result, 'controls': controls}
+    return {'animations': result, 'controls': controls}
 
 
 def prepare_interactions(selection: dict, category: str, obj: GameObject, *,

@@ -308,8 +308,11 @@ price/Enabled overrides are not reinterpreted as mesh visibility. Changes to
 `AI.Special_AI` are also excluded because they can change the event controller.
 
 Luna already owns ARK, GameObjectData, RK, RKM and PVR parsing and is reused at
-those boundaries. Its RK submesh `unknown` value has no established visibility
-meaning; its glTF export does not implement game-object eye/wardrobe controllers.
+those boundaries. The locked RK reader validates binary section layouts and
+mesh references; game-data checks the parsed model for its supported version,
+skinning and UV requirements without rereading the file. Its RK submesh `unknown`
+value has no established visibility meaning; its glTF export does not implement
+game-object eye/wardrobe controllers.
 The converter retains strict ANIM 0/1/4 decoding because current Luna's frame
 reader assumes the type-4 layout. Native static code confirms the retained
 `0.031250953674316406` type-4 translation constant; replacing it with `1/32`
