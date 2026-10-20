@@ -83,7 +83,7 @@ references are uploaded.
 The declared external library stem identifies **both** `.anim` and `.csv`.
 `ANIM.header.name` is recorded but never used to substitute a CSV. Retained
 native loader code appends both extensions to its same input stem. Real inputs
-include misleading embedded names, so Luna's current implicit CSV lookup is not
+include misleading embedded names, so Luna's default implicit CSV lookup is not
 an equivalent object-association API.
 
 Equal bone counts are only a rejection check after finding an explicit native
@@ -93,8 +93,9 @@ within that verified source relationship, not arbitrary retargeting.
 
 ### CSV validation
 
-A shared parser serves discovery and conversion because current Luna's CSV
-reader has no equivalent explicit-path, lossless validation API. Discovery
+A shared parser serves discovery and conversion with the same clip-selection
+policy. Luna now provides explicit-path, lossless CSV records; this module
+retains its existing range, duplicate-conflict and partial-result rules. Discovery
 retains valid, unambiguous clips and records invalid rows. **Any** bad or
 conflicting declaration for a name invalidates that name completely. It never
 keeps the first or last conflicting definition. An empty/missing library or a
@@ -307,21 +308,24 @@ wardrobe dependency are excluded pending verified merge semantics; ordinary
 price/Enabled overrides are not reinterpreted as mesh visibility. Changes to
 `AI.Special_AI` are also excluded because they can change the event controller.
 
-Luna already owns ARK, GameObjectData, RK, RKM and PVR parsing and is reused at
+Luna owns ARK, GameObjectData, RK, RKM, PVR and ANIM parsing and is reused at
 those boundaries. The locked RK reader validates binary section layouts and
 mesh references; game-data checks the parsed model for its supported version,
 skinning and UV requirements without rereading the file. Its RK submesh `unknown`
 value has no established visibility meaning; its glTF export does not implement
 game-object eye/wardrobe controllers.
-The converter retains strict ANIM 0/1/4 decoding because current Luna's frame
-reader assumes the type-4 layout. Native static code confirms the retained
-`0.031250953674316406` type-4 translation constant; replacing it with `1/32`
-would change decoded positions. See the converter README for byte layouts.
+The ANIM adapter now consumes Luna's decoded `Anim.raw_frames`, converts its
+WXYZ quaternions to XYZW and retains the converter's 5.2 / type 0/1/4, exact
+length and quaternion-validity requirements. Native static code confirms the
+`0.031250953674316406` type-4 translation constant now used by Luna; the old
+reader's `1/32` compensation is removed. See the converter README for layouts.
 
-Potential Luna contributions are explicit CSV-path/lossless row support and
-correct ANIM layout dispatch. Object orchestration and viewer policy belong
-here; GLB serialization and validation remain in the conversion core. No Luna
-fork, independent package lock or third pull request is required by this change.
+Luna [PR #12](https://github.com/ego-lay-atman-bay/luna-kit/pull/12) provides the
+ANIM layout dispatch, fixed-array API and lossless CSV records. The dependency
+temporarily pins that PR's published commit until it is merged upstream. Object
+orchestration and viewer policy belong here; GLB serialization and validation
+remain in the conversion core. No vendored Luna source or separate converter
+package lock is added.
 
 ### Zero-weight geometry
 

@@ -32,10 +32,10 @@ class AnimationFormatTests(unittest.TestCase):
     def test_type4_matches_pinned_public_reader_without_csv_side_effects(self):
         from luna_kit.model import Anim
         self.write(4, struct.pack('<3hh3b', -300, 200, 100, 23169, 0, 0, 89) + struct.pack('<3hh3b', 3, -7, 9, -32767, 0, 0, 0))
-        raw = self.path.read_bytes(); reference = Anim(raw); result = read_animation(self.path)
-        expected_t = [[[pose.position.x, pose.position.y, pose.position.z] for pose in frame] for frame in reference.frames]
-        expected_q = [[[pose.quaternion.x, pose.quaternion.y, pose.quaternion.z, pose.quaternion.w] for pose in frame] for frame in reference.frames]
-        np.testing.assert_array_equal(result.translations, np.asarray(expected_t) * 32 * 0.031250953674316406)
+        raw = self.path.read_bytes(); frames = Anim(raw).get_frames(); result = read_animation(self.path)
+        expected_t = [[[pose.position.x, pose.position.y, pose.position.z] for pose in frame] for frame in frames]
+        expected_q = [[[pose.quaternion.x, pose.quaternion.y, pose.quaternion.z, pose.quaternion.w] for pose in frame] for frame in frames]
+        np.testing.assert_array_equal(result.translations, expected_t)
         np.testing.assert_array_equal(result.rotations_xyzw, expected_q)
 
 if __name__ == '__main__': unittest.main()

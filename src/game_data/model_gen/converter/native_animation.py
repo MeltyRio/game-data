@@ -1,15 +1,14 @@
-"""Validated RK ANIM 5.2 records, independent of archive and character identity.
+"""Adapt Luna's decoded ANIM frames to the converter's RK 5.2 contract.
 
-Type 4's packed layout follows the public Luna reader (GPL-3.0).
-The game-data uv.lock is the sole Luna dependency pin.
-Types 0/1 are decoded from documented local byte/bind evidence; see
-README.md. No source-specific decoder imports are required.
+The Luna revision is resolved in game-data's uv.lock. Format limits and
+quaternion validity remain converter policy; binary decoding belongs to Luna.
 """
 from dataclasses import dataclass
 from pathlib import Path
 import struct
 import numpy as np
 from numpy.typing import NDArray
+from luna_kit.model import Anim
 
 NATIVE_POSITION_SCALE = 0.031250953674316406
 HEADER = struct.Struct('<8sII64sIII')
@@ -49,33 +48,11 @@ def read_animation_header(path: str | Path) -> AnimationHeader:
 def read_animation(path: str | Path) -> NativeAnimation:
     path = Path(path)
     header = read_animation_header(path)
-    raw = path.read_bytes()
-    shape = (header.frame_count, header.bone_count)
-    kind = header.frame_type
-    if kind == 0:
-        records = np.frombuffer(raw, dtype='<f4', offset=HEADER.size).reshape(*shape, 8)
-        # The known 32-byte native record includes a unit fourth position lane.
-        # Do not silently discard a future file's scale/homogeneous semantics.
-        if not np.all(records[..., 7] == 1):
-            raise ValueError('Unsupported non-unit type 0 animation transform lane')
-        translations = records[..., 4:7].astype(np.float64)
-        rotations = records[..., :4].astype(np.float64)
-    elif kind == 1:
-        dtype = np.dtype([('position', '<f4', 3), ('w', '<f4'), ('xyz', '<i2', 3)])
-        records = np.frombuffer(raw, dtype=dtype, offset=HEADER.size).reshape(shape)
-        translations = records['position'].astype(np.float64)
-        rotations = np.empty((*shape, 4), dtype=np.float64)
-        rotations[..., :3] = records['xyz'].astype(np.float64) / 32767
-        rotations[..., 3] = records['w']
-    else:
-        dtype = np.dtype([('position', '<i2', 3), ('w', '<i2'), ('xyz', 'i1', 3)])
-        records = np.frombuffer(raw, dtype=dtype, offset=HEADER.size).reshape(shape)
-        translations = records['position'].astype(np.float64) * NATIVE_POSITION_SCALE
-        rotations = np.empty((*shape, 4), dtype=np.float64)
-        rotations[..., :3] = records['xyz'].astype(np.float64) / 127
-        rotations[..., 3] = records['w'].astype(np.float64) / 32767
-    if not np.isfinite(translations).all() or not np.isfinite(rotations).all():
-        raise ValueError('Non-finite native animation transform')
+    # A binary stream avoids Luna's optional neighbouring-CSV lookup.
+    with path.open('rb') as stream:
+        frames = Anim(stream).raw_frames
+    translations = frames['position'].copy()
+    rotations = frames['quaternion'][..., [1, 2, 3, 0]]  # WXYZ to XYZW.
     if np.any(np.linalg.norm(rotations, axis=-1) <= .5):
         raise ValueError('Degenerate native animation quaternion')
     # Clip and rest poses share these frame arrays; keep slices read-only.

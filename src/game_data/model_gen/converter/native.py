@@ -558,7 +558,7 @@ def load_native(
             "bones": [{"name": bone.name, "parent": bone.parentIndex,
                        "bind_global": np.array(bone.matrix_4x4, dtype=np.float64)} for bone in model.bones],
             "clips": clips, "rest": {"name": rest_name, "frame": rest_frame, **transforms(rest_frame, rest_frame)},
-            "provenance": {"animation_sha256": animation_digest, "luna_dependency": LUNA_DEPENDENCY, "luna_reader": "luna_kit.model.RKModel", "animation_reader": "atp-rk-5.2-0-1-4-v1", "anim_format": {"major": major, "minor": minor, "type": frame_type},
+            "provenance": {"animation_sha256": animation_digest, "luna_dependency": LUNA_DEPENDENCY, "luna_reader": "luna_kit.model.RKModel", "animation_reader": "luna_kit.model.Anim.raw_frames", "anim_format": {"major": major, "minor": minor, "type": frame_type},
                            "event_source": event_source, "duplicate_csv_rows_merged": duplicates, "unselected_csv_diagnostics": csv_diagnostics,
                            "rest_source": "native-csv-first-frame" if rest_name is not None else "caller-selected-native-frame",
                            "native_position_scale": NATIVE_POSITION_SCALE, "material_sources": material_sources,

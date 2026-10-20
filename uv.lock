@@ -511,7 +511,7 @@ requires-dist = [
     { name = "argcomplete", specifier = ">=3.6.3" },
     { name = "boto3", specifier = ">=1.43.26" },
     { name = "google-play-scraper", git = "https://github.com/ego-lay-atman-bay/google-play-scraper" },
-    { name = "luna-kit", extras = ["all"], git = "https://github.com/ego-lay-atman-bay/luna-kit/" },
+    { name = "luna-kit", extras = ["all"], git = "https://github.com/ego-lay-atman-bay/luna-kit/?rev=291fcc7b25bd8be1d78f93df4ec14025a41d04e9" },
     { name = "pillow", specifier = ">=12.2.0" },
     { name = "playstoreapi", git = "https://github.com/ABhiTheModder/playstoreapi" },
     { name = "pycairo", specifier = ">=1.29.0" },
@@ -684,7 +684,7 @@ wheels = [
 [[package]]
 name = "luna-kit"
 version = "1.4.0"
-source = { git = "https://github.com/ego-lay-atman-bay/luna-kit/#4fd566fbd8effb9f29404808ad3ef4d5daf97e4a" }
+source = { git = "https://github.com/ego-lay-atman-bay/luna-kit/?rev=291fcc7b25bd8be1d78f93df4ec14025a41d04e9#291fcc7b25bd8be1d78f93df4ec14025a41d04e9" }
 
 [package.optional-dependencies]
 all = [

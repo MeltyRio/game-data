@@ -1,6 +1,7 @@
 """Reusable skeletal GLBs; model-specific event bindings are not cached here."""
 from collections import OrderedDict
 import hashlib
+from importlib import metadata
 import json
 from pathlib import Path
 import struct
@@ -32,7 +33,7 @@ class AnimationCache:
 
     The remote index points at ordinary immutable GLBs published by sync. It is
     written only after sync succeeds; this class never uploads those resources.
-    Compiler source and NumPy versions invalidate entries when encoding changes.
+    Compiler source, NumPy and Luna versions invalidate entries when encoding changes.
     """
     def __init__(self, directory: str | Path, *, version: str = 'skeletal-glb-v1',
                  memory_bytes: int = 64 * 1024**2, decoded_bytes: int = 128 * 1024**2) -> None:
@@ -40,7 +41,8 @@ class AnimationCache:
         self.memory_bytes, self.decoded_bytes = memory_bytes, decoded_bytes
         compiler = [hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
                     for name in ('core.py', 'gltf.py', 'native_animation.py', 'animation_cache.py')]
-        self.version = [version, np.__version__, *compiler]
+        luna = metadata.distribution('luna-kit')
+        self.version = [version, np.__version__, luna.version, luna.read_text('direct_url.json'), *compiler]
         self.memory: OrderedDict[str, tuple[dict, bytes]] = OrderedDict()
         self.decoded: OrderedDict[str, NativeAnimation] = OrderedDict()
         self.fingerprints: dict[Path, tuple[tuple, str]] = {}

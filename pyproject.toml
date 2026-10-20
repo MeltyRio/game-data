@@ -35,7 +35,7 @@ reinstall-package = ["luna-kit"]
 types-boto3-custom = { path = "vendored/types_boto3_custom-1.43.26-py3-none-any.whl" }
 google-play-scraper = { git = "https://github.com/ego-lay-atman-bay/google-play-scraper" }
 playstoreapi = { git = "https://github.com/ABhiTheModder/playstoreapi" }
-luna-kit = { git = "https://github.com/ego-lay-atman-bay/luna-kit/" }
+luna-kit = { git = "https://github.com/ego-lay-atman-bay/luna-kit/", rev = "291fcc7b25bd8be1d78f93df4ec14025a41d04e9" }
 
 [dependency-groups]
 dev = [

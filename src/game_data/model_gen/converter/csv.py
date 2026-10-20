@@ -1,8 +1,8 @@
 """Strict native clip rows shared by association auditing and conversion.
 
-Luna currently derives a CSV path from the embedded ANIM name, converts invalid
-numbers to defaults, and loses duplicate declarations in a name-keyed dict.
-Keep this validation boundary until it exposes an equivalent explicit-path API.
+Luna exposes explicit-path, lossless CSV records. This module retains the
+existing clip-selection policy, including frame ranges, duplicate conflicts,
+partial diagnostics and native-clamp export budgets.
 """
 import csv
 import math

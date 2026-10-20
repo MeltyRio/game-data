@@ -103,11 +103,14 @@ not invalidate GLB digests. GLB bytes must reach hosting unchanged.
 
 ## Reader reuse and retained format handling
 
-Luna Kit reads RK geometry and bones, RKM fields and PVR textures. The existing
-game-data `uv.lock` is the sole authority for the Luna source revision; this
-module adds no independent pin or vendored dependency. Local provenance names
-that lock and the `luna_kit.model.RKModel` reader rather than reporting the old
-ATP package's Luna revision.
+Luna Kit reads RK geometry and bones, RKM fields, PVR textures and ANIM frames.
+The Luna source revision is declared in game-data `pyproject.toml` and resolved
+in `uv.lock`; this module adds no independent pin or vendored dependency. Local
+provenance names that lock and the `luna_kit.model.RKModel` reader rather than reporting the old
+ATP package's Luna revision. The source temporarily pins the published commit
+from Luna
+[PR #12](https://github.com/ego-lay-atman-bay/luna-kit/pull/12) until its ANIM API
+is merged.
 
 The caller supplies the complete current extraction closure. In that data set,
 an absent RKM uses the verified 11.4.3c native material-loader default: Luna's
@@ -128,7 +131,8 @@ requirements: supported header pairs (5.0, 5.1, 5.2 and 6.2), geometry, skinning
 one supported UV attribute and a supported bone hierarchy. These are conversion
 limits, not a claim that Luna cannot read other valid RK models.
 
-ANIM 5.2 retains the converter's strict little-endian type 0/1/4 handling:
+ANIM 5.2 uses Luna's `Anim.raw_frames` through a thin adapter, retaining the
+converter's little-endian type 0/1/4 limits:
 
 - Type 0, 32 bytes: XYZW float quaternion, XYZ float translation and a unit
   float lane. Non-unit values in that lane are rejected.
@@ -137,15 +141,16 @@ ANIM 5.2 retains the converter's strict little-endian type 0/1/4 handling:
 - Type 4, 11 bytes: XYZ int16 translation times 0.031250953674316406, W int16
   divided by 32767, XYZ int8 divided by 127.
 
-Payload length, finite values and quaternion validity are checked. The locked
-Luna animation reader rejects frame types other than 4 and truncated records.
-It retains a different type-4 translation scale (`1/32`) and accepts trailing
-bytes; replacing this decoder with it would change values and lose type 0/1
-support. The converter retains its supported version and exact-length checks.
-The retained decoder is a narrow format adaptation, not a separate archive or
-game-data pipeline. Type 4's packed layout is checked against Luna's reader;
-types 0/1 have synthetic byte-record tests and preserve the previously reviewed
-converter layout. Those tests alone do not prove every game asset's semantics.
+The adapter reads the decoded float64 arrays directly, reorders WXYZ
+quaternions to the converter's XYZW convention, and keeps the returned arrays
+read-only. It uses a binary stream to avoid implicit CSV discovery; the existing
+game-data CSV selection remains explicit. Luna handles record decoding and
+finite-value checks, including the native type-4 position scale, so there is no
+legacy `1/32` correction or duplicate layout decoder. The converter retains its
+supported version, exact payload length, non-empty dimensions and quaternion
+validity checks. Luna's broader type 2/3 support does not expand this converter's
+accepted formats. Existing synthetic tests cover the adapter's numerical and
+format boundaries; they do not prove every game asset's semantics.
 
 Unsupported or invalid PVR decoding is reported as a native-input failure so
 normal generation can exclude that object. A required external alpha image must

@@ -53,8 +53,8 @@ def _sha(path: Path) -> str:
 
 
 def _animation(path: Path) -> dict:
-    # Reuse Luna's header schema, without invoking its fixed type-4 frame
-    # decoder on type-0/type-1 records. Frame conversion remains a separate gate.
+    # Reuse Luna's header schema without decoding frames during discovery.
+    # Frame conversion remains a separate gate.
     import dataclasses_struct as dcs
     from luna_kit.model.anim import Header
     size = dcs.get_struct_size(Header)
