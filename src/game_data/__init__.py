@@ -324,7 +324,6 @@ def build_cdn(
             sync(
                 dist_folder = dist_dir,
                 bucket = BUCKET,
-                repair_model_assets = model_cache.invalid_remote_assets if model_cache is not None else None,
             )
 
             if model_cache is not None:

@@ -61,6 +61,30 @@ class NativeAdapterTests(unittest.TestCase):
                            visible_meshes=['body'], rest_name='rest', event_path=self.folder / 'tiny.xml')
 
 
+    def test_native_component_weights_survive_conversion_and_standard_transport(self):
+        from .test_converter import unpack
+        from .test_export import accessor
+
+        # A real Coiffed weight row, with the fixture's one valid joint. This
+        # also exercises glTF's requirement to merge duplicate influences.
+        path = self.folder / 'tiny.rk'
+        raw = bytearray(path.read_bytes())
+        for i in range(24):
+            tag, offset, _, _ = struct.unpack_from('<4I', raw, 80 + 16 * i)
+            if tag == 17:
+                struct.pack_into('<4B4H', raw, offset, 0, 0, 0, 0, 16048, 8845, 13012, 4287)
+                break
+        path.write_bytes(raw)
+        native = self.load()
+        model, _ = from_native(native, identity='NativeComponents')
+        np.testing.assert_array_equal(model.weights, native['weights'])
+        self.assertAlmostEqual(model.weights[0].sum(), 42192 / 65535)
+        document, binary = unpack(model_glb(model))
+        attrs = document['meshes'][0]['primitives'][0]['attributes']
+        np.testing.assert_array_equal(accessor(document, binary, attrs['_NATIVE_WEIGHTS']), model.weights.astype('float32'))
+        np.testing.assert_array_equal(accessor(document, binary, attrs['_NATIVE_JOINTS']), model.joints)
+        np.testing.assert_array_equal(accessor(document, binary, attrs['WEIGHTS_0']), [[1, 0, 0, 0]] * 3)
+
     def test_absent_rkm_reuses_luna_and_native_default_material_state(self):
         from luna_kit.model.rk import parse_rkm
         for alpha in (255, 64):

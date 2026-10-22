@@ -135,5 +135,38 @@ def resolve_wardrobe(owner: GameObject, game_objects: GameObjectData, *,
                            'default_slots': {slot: item['id'] for slot, item in defaults.items()},
                            'selected_slots': {slot: item['id'] for slot, item in selected.items()},
                            'parts': used_parts,
+                           'sets': {sid: {slot: item['id'] for slot, item in direct.items()}
+                                    for sid, (direct, _) in choices.items()},
+                           'alternative_only_sets': [sid for sid in ids
+                               if sets[sid].get('PonySet', {}).get('IsOnlyAlternativeMesh')],
                            'rule': 'first native set defaults; requested outfit explicit parts and one LinkedPart override defaults',
                            'context': 'complete-outfit viewer policy; no saved player equipment'}}
+
+
+def interactive_wardrobe(resolved: dict, mesh_names: list[str]) -> dict:
+    """Project the already resolved owner's wardrobe onto exact RK indices.
+
+    Only direct Parts become choices; linked-only parts remain dependencies.
+    An absent exact mesh is an explicit empty appearance, not a guessed mesh.
+    Alternative-only sets need a verified actor context and stay out of this
+    ordinary pony-page wardrobe. Existing complete-outfit previews are separate.
+    """
+    excluded = set(resolved['alternative_only_sets'])
+    sets = {sid: slots for sid, slots in resolved['sets'].items() if sid not in excluded}
+    if resolved['default_set'] not in sets:
+        _fail('alternative_default_wardrobe_unverified', 'Default wardrobe requires an alternative actor context')
+    ids = {pid for slots in sets.values() for pid in slots.values()}
+    ids.update(resolved['parts'][pid]['linked_part'] for pid in list(ids)
+               if resolved['parts'][pid]['linked_part'])
+    indices = {}
+    for index, name in enumerate(mesh_names):
+        indices.setdefault(name, []).append(index)
+    parts = {}
+    for pid, item in resolved['parts'].items():
+        if pid not in ids:
+            continue
+        row = {'slot': item['slot'], 'meshes': indices.get(item['mesh'], [])}
+        if item['linked_part']:
+            row['linked'] = item['linked_part']
+        parts[pid] = row
+    return {'version': 1, 'defaults': resolved['default_slots'], 'sets': sets, 'parts': parts}

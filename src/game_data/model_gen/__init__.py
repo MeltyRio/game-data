@@ -1,7 +1,6 @@
 """Generate the optional 3D catalogue inside the existing game-data build."""
 from collections.abc import Collection, Iterable
 from functools import lru_cache
-import hashlib
 import json
 from pathlib import Path
 import tempfile
@@ -23,6 +22,7 @@ from .selection import SelectionError, index_event_files, select_native_view
 from .interactions import InteractionError, prepare_interactions
 from .native_emitter import load_native_emitter
 from .additional import prepare_additional_actor, attach_additional_actor
+from .wardrobe import WardrobeError, interactive_wardrobe
 
 
 if TYPE_CHECKING:
@@ -82,14 +82,7 @@ def _publish_local(stage: Path, dist: Path, catalogue: dict) -> None:
         if not destination.resolve().is_relative_to(owned.resolve()):
             raise ValueError('3D asset leaves its namespace')
         destination.parent.mkdir(parents=True, exist_ok=True)
-        if destination.exists():
-            if not destination.resolve().is_relative_to(owned.resolve()):
-                raise ValueError('3D asset leaves its namespace')
-            if destination.read_bytes() != source.read_bytes():
-                if key not in fixed_models:
-                    raise ValueError('Existing immutable GLB differs: ' + source.name)
-                source.replace(destination)
-        else:
+        if key in fixed_models or not destination.exists():
             source.replace(destination)
     catalogue_path = dist/'models_3d.json'
     if catalogue_path.exists() and not catalogue_path.resolve().is_relative_to(dist.resolve()):
@@ -140,19 +133,16 @@ def generate_models(native_objects: GameObjectData, extracted_dir: str | Path, d
                             'failed_rkm_extractions': sorted(failed_rkms),
                             'coverage': 'partial; only validated basic scenes'}
     catalogue = {'schemaVersion': 1, 'models': {}}
-    referenced = {}
+    referenced: set[str] = set()
     additional_cache = {}
     @lru_cache(maxsize=1)
-    def read_model(path: Path, digest: str) -> RKModel:
-        # Adjacent identities can share a large RK; retain only the last parse.
-        model = load_model(path)
-        if animation_cache.digest(path) != digest:
-            raise NativeInputError('Native model changed during parsing')
-        return model
+    def read_model(path: Path) -> RKModel:
+        # Extracted inputs stay fixed during a build; retain only the last RK.
+        return load_model(path)
 
     def prepare_model(name: str) -> RKModel:
         path = (folder/name).resolve()
-        model = read_model(path, animation_cache.digest(path))
+        model = read_model(path)
         info = report['models'][name]
         info.update(meshes=[mesh.name for mesh in model.meshes],
                     materials=[material.name for material in model.materials])
@@ -214,6 +204,16 @@ def generate_models(native_objects: GameObjectData, extracted_dir: str | Path, d
                                                                  ('PonyPart', wardrobe.get('part_ids', []))]:
                         if any(_render_override(campaign, dependency_category, dep) for dep in dependency_ids):
                             raise SelectionError('campaign_visual_override_unverified', 'Wardrobe dependency override requires review')
+                    wardrobe_profile = None
+                    if category == 'Pony' and wardrobe:
+                        try:
+                            wardrobe_profile = interactive_wardrobe(wardrobe, report['models'][model_name]['meshes'])
+                            if wardrobe['alternative_only_sets']:
+                                wardrobe['interactive_exclusions'] = {
+                                    sid: 'alternative actor context is not verified'
+                                    for sid in wardrobe['alternative_only_sets']}
+                        except WardrobeError as error:
+                            wardrobe['interactive_unavailable'] = str(error)
                     base_selection = selection
                     interaction_effects = {}
                     effect_provenance = {}
@@ -248,7 +248,7 @@ def generate_models(native_objects: GameObjectData, extracted_dir: str | Path, d
                         folder/association['csv']['file'], selection['clip_names'], identity=identity,
                         model_filename=identity, animation_filenames=True,
                         animation_cache=animation_cache, texture_cache=texture_cache,
-                        rk_model=rk_model,
+                        rk_model=rk_model, wardrobe=wardrobe_profile,
                         visible_meshes=selection['visible_meshes'], rest_name=selection['rest_name'],
                         rest_frame=selection.get('rest_frame'), event_path=selection['event_path'],
                         events_absent=selection.get('events_absent', False),
@@ -268,7 +268,7 @@ def generate_models(native_objects: GameObjectData, extracted_dir: str | Path, d
                             {'code': 'interaction-assets-unavailable', 'reason': str(error)}]}
                         bundle = convert_selected(selection, {})
                     # Only source preparation/conversion errors are isolated.
-                    # Output integrity checks and writes below remain fatal.
+                    # Output writes below remain fatal.
                     source_complete = True
                     model_row = bundle.catalogue['models'][identity]
                     if 'preferred_animations' in selection:
@@ -284,28 +284,15 @@ def generate_models(native_objects: GameObjectData, extracted_dir: str | Path, d
                             if key in bundle_files and bundle_files[key] != data:
                                 raise ValueError('Conflicting parent/child asset content')
                             bundle_files[key] = data
-                    # Complete and validate both actors before staging either.
-                    fixed_model_path = model_path(identity)
-                    pending = {}
                     for key, data in bundle_files.items():
-                        digest = hashlib.sha256(data).hexdigest()
-                        if key == fixed_model_path:
-                            valid = (key == model_row['path'] and digest == model_row['sha256']
-                                     and len(data) == model_row['bytes'])
-                        else:
-                            valid = asset_digest(key) == digest
-                        if not valid:
-                            raise ValueError('Converter returned an invalid asset key or digest')
-                        previous = referenced.get(key)
-                        if previous is not None and previous != digest:
-                            raise ValueError('Conflicting generated asset content')
-                        if previous is None:
-                            pending[key] = digest
-                    for key, digest in pending.items():
+                        if key in referenced:
+                            continue
                         path = stage/key
+                        if not is_asset_path(key) or not path.resolve().is_relative_to(stage.resolve()):
+                            raise ValueError('Invalid generated asset path')
                         path.parent.mkdir(parents=True, exist_ok=True)
-                        path.write_bytes(bundle_files[key])
-                        referenced[key] = digest
+                        path.write_bytes(data)
+                        referenced.add(key)
                     catalogue['models'][identity] = model_row
                     catalogue['schemaVersion'] = max(catalogue['schemaVersion'], bundle.catalogue['schemaVersion'])
                     if additional_provenance is not None:

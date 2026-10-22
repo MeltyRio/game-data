@@ -212,8 +212,11 @@ class NormalPipeline(unittest.TestCase):
         clip = glb_json((self.dist/wave['path']).read_bytes())['extras']['atpClip']
         self.assertNotIn('eventProfile', clip)
         self.assertNotIn('events', clip)
-        self.assertEqual(wave['eventBinding'], {'version': 1, 'events': [
-            {'frame': 1, 'type': 'EyeSet', 'state': 'Happy', 'enableBlink': False}]})
+        self.assertEqual(wave['eventBinding'], {'version': 2, 'events': [
+            {'frame': 1, 'type': 'EyeSet', 'state': 'Happy', 'enableBlink': False}],
+            'visibility': [{'meshName': name, 'times': [0, 1 / clip['fps']],
+                            'values': [name == 'eyes_open', name == 'eyes_happy']}
+                           for name in self.names[1:6]]})
         self.assertTrue(report['identities']['Synthetic_Flag']['converted'])
 
     def test_normal_generation_keeps_explicit_empty_eye_noop(self):
@@ -227,6 +230,7 @@ class NormalPipeline(unittest.TestCase):
         wave = next(clip for clip in row['animations'] if clip['id'] == 'wave')
         self.assertNotIn('events', glb_json((self.dist/wave['path']).read_bytes())['extras']['atpClip'])
         self.assertEqual(len(wave['eventBinding']['events']), 1)
+        self.assertEqual(wave['eventBinding']['visibility'], [])
 
     def test_normal_subobject_generation_retains_prop_and_binds_events_outside_shared_glb(self):
         (self.raw/'flag.xml').write_text('<MeshList><flag><SubObject ID="prop" Name="hat" DefaultVisible="0"/>'
@@ -247,9 +251,10 @@ class NormalPipeline(unittest.TestCase):
         self.assertFalse(doc['nodes'][prop]['extras']['atpDefaultVisible'])
         wave = next(row for row in model['animations'] if row['id'] == 'wave')
         self.assertEqual(wave['eventBinding']['events'], [
-            {'frame': 0, 'type': 'SubObject', 'meshes': [6], 'visible': True},
-            {'frame': 1, 'type': 'EyeSet', 'state': 'Happy', 'enableBlink': False},
-            {'frame': 1, 'type': 'SubObject', 'meshes': [6], 'visible': False}])
+            {'frame': 1, 'type': 'EyeSet', 'state': 'Happy', 'enableBlink': False}])
+        fps = glb_json((self.dist/wave['path']).read_bytes())['extras']['atpClip']['fps']
+        self.assertEqual(next(curve for curve in wave['eventBinding']['visibility'] if curve['meshName'] == 'hat'),
+                         {'meshName': 'hat', 'times': [0, 1 / fps], 'values': [True, False]})
         self.assertNotIn('events', glb_json((self.dist/wave['path']).read_bytes())['extras']['atpClip'])
 
     def test_converter_rejects_missing_or_changed_source_events(self):

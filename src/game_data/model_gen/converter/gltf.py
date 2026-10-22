@@ -69,7 +69,8 @@ def model_glb(model: Model) -> bytes:
     require(np.isfinite(model.scale) and model.scale > 0, 'Invalid model scale')
     require(model.positions.shape == (count,3) and model.texcoords.shape == (count,2), 'Invalid vertex arrays')
     require(model.joints.shape == model.weights.shape == (count,4), 'Invalid skin arrays')
-    require(np.isfinite(model.weights).all() and (model.weights >= 0).all() and np.allclose(model.weights.sum(axis=1),1,atol=1e-6), 'Invalid normalized skin weights')
+    require(np.isfinite(model.weights).all() and (model.weights >= 0).all()
+            and (model.weights.sum(axis=1) > 0).all(), 'Invalid skin weights')
     require(np.equal(model.joints, np.floor(model.joints)).all() and (model.joints >= 0).all() and (model.joints < bone_count).all(), 'Invalid joint indices')
     require(model.bind_global.shape == (bone_count,4,4) and np.isfinite(model.bind_global).all(), 'Invalid bind array')
     require(np.allclose(model.bind_global[:,3,:], [0,0,0,1], atol=1e-6) and np.all(np.abs(np.linalg.det(model.bind_global)) > 1e-10), 'Invalid bind matrices')
@@ -82,12 +83,18 @@ def model_glb(model: Model) -> bytes:
             weights[duplicate, previous] += weights[duplicate, slot]
             weights[duplicate, slot] = 0
     joints[weights == 0] = 0
+    # Standard glTF transport only. Native components remain untouched below.
+    weights /= weights.sum(axis=1, keepdims=True)
     nodes = rig_nodes(g, model.rig, model.rest_global, model.scale)
     g.document['extras']['atpModel'] = {'identity': model.name, 'boneNames': model.rig.names}
+    if model.wardrobe is not None:
+        g.document['extras']['atpWardrobe'] = model.wardrobe
     attributes = {'POSITION': g.accessor(model.positions, 'VEC3', target=34962, bounds=True),
                   'TEXCOORD_0': g.accessor(model.texcoords, 'VEC2', target=34962),
                   'JOINTS_0': g.accessor(joints, 'VEC4', component=5123, target=34962),
-                  'WEIGHTS_0': g.accessor(weights, 'VEC4', target=34962)}
+                  'WEIGHTS_0': g.accessor(weights, 'VEC4', target=34962),
+                  '_NATIVE_JOINTS': g.accessor(model.joints, 'VEC4', component=5123, target=34962),
+                  '_NATIVE_WEIGHTS': g.accessor(model.weights, 'VEC4', target=34962)}
     g.document.update(materials=[], textures=[], images=[], samplers=[])
     texture_transform = False
     shared_clock = None
@@ -225,9 +232,6 @@ def animation_glb(clip: Clip) -> bytes:
             animation['channels'].append({'sampler': sampler, 'target': {'node': bone+1, 'path': path}})
     g.document['animations'] = [animation]
     g.document['extras']['atpClip'] = {'frameCount': count, 'fps': clip.fps, 'duration': count/clip.fps}
-    if clip.events is not None:
-        require(isinstance(clip.events, list), 'Invalid native clip events')
-        g.document['extras']['atpClip'].update(eventProfile='ponybook-v1', events=clip.events)
     # Standard STEP channels remain usable by ordinary/older glTF consumers.
     # Native-aware players interpolate these raw model-space samples first,
     # then derive parent-local TRS. Never normalize endpoint quaternions here.

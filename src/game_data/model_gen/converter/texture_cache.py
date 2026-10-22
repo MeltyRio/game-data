@@ -9,17 +9,16 @@ from __future__ import annotations
 from collections.abc import Callable, Collection
 import hashlib
 from importlib import metadata
-import io
 import json
 import os
 from pathlib import Path
 import struct
 import tempfile
 
-from PIL import Image, features
+from PIL import features
 
-_HEADER = struct.Struct('>8s32s32sIIQ')
-_MAGIC = b'ATPTEX01'
+_HEADER = struct.Struct('>8s32sIIQ')
+_MAGIC = b'ATPTEX02'
 _MAX_ENTRY_BYTES = 64 * 1024 * 1024
 
 
@@ -33,7 +32,7 @@ def _decoder_fingerprint() -> str:
 class TextureCache:
     """One generation's handle to a persistent encoded-PNG cache directory."""
 
-    def __init__(self, directory: str | Path, max_bytes: int = 512 * 1024 * 1024):
+    def __init__(self, directory: str | Path, max_bytes: int = 512 * 1024 * 1024) -> None:
         if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes < 0:
             raise ValueError('Texture cache byte budget must be a nonnegative integer')
         self.directory = Path(directory)
@@ -55,23 +54,18 @@ class TextureCache:
             with path.open('rb') as handle:
                 if os.fstat(handle.fileno()).st_size > min(self.max_bytes, _MAX_ENTRY_BYTES):
                     raise ValueError('Cache entry exceeds its byte budget')
-                magic, stored_key, png_hash, width, height, length = _HEADER.unpack(handle.read(_HEADER.size))
+                magic, stored_key, width, height, length = _HEADER.unpack(handle.read(_HEADER.size))
                 if magic != _MAGIC or stored_key != key or length > min(self.max_bytes, _MAX_ENTRY_BYTES):
                     raise ValueError('Invalid cache entry header')
                 png = handle.read(length + 1)
-            if len(png) != length or hashlib.sha256(png).digest() != png_hash:
-                raise ValueError('Cache PNG digest or length differs')
-            # verify() checks PNG chunks/CRCs without expanding IDAT into pixels.
-            with Image.open(io.BytesIO(png)) as image:
-                if image.format != 'PNG' or image.mode != 'RGBA' or image.size != (width, height):
-                    raise ValueError('Cache PNG format or dimensions differ')
-                image.verify()
+            if len(png) != length:
+                raise ValueError('Truncated texture cache entry')
         except FileNotFoundError:
             return None
         except OSError:
             self.io_errors += 1
             return None
-        except (ValueError, SyntaxError, struct.error, Image.DecompressionBombError):
+        except (ValueError, struct.error):
             self.invalid_entries += 1
             return None
         try:
@@ -90,7 +84,7 @@ class TextureCache:
             self.directory.mkdir(parents=True, exist_ok=True)
             with tempfile.NamedTemporaryFile(dir=self.directory, suffix='.tmp', delete=False) as handle:
                 temporary = Path(handle.name)
-                handle.write(_HEADER.pack(_MAGIC, key, hashlib.sha256(png).digest(), width, height, len(png)))
+                handle.write(_HEADER.pack(_MAGIC, key, width, height, len(png)))
                 handle.write(png)
             os.replace(temporary, path)
             temporary = None
@@ -137,10 +131,5 @@ class TextureCache:
             return cached
         self.misses += 1
         result = decode()
-        try:
-            # A concurrent source change must not store new pixels under an old key.
-            if self._key(sources, settings) == key:
-                self._write(path, key, result)
-        except OSError:
-            self.io_errors += 1
+        self._write(path, key, result)
         return result

@@ -6,6 +6,7 @@ quaternion validity remain converter policy; binary decoding belongs to Luna.
 from dataclasses import dataclass
 from pathlib import Path
 import struct
+from typing import TypedDict
 import numpy as np
 from numpy.typing import NDArray
 from luna_kit.model import Anim
@@ -22,6 +23,15 @@ class AnimationHeader:
     bone_count: int
     frame_count: int
     frame_type: int
+
+
+class NativeClip(TypedDict):
+    name: str
+    start: int
+    end: int
+    fps: float
+    translations: NDArray[np.float64]
+    rotations_xyzw: NDArray[np.float64]
 
 
 @dataclass(frozen=True)

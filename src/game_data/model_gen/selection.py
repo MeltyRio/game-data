@@ -7,7 +7,6 @@ the reviewed native RK loader selects its own initial static pose.
 """
 from pathlib import Path
 from typing import TYPE_CHECKING, NoReturn
-import hashlib
 import re
 from xml.etree import ElementTree as ET
 
@@ -63,7 +62,7 @@ def _event_file(folder: Path, stem: str, *, event_files: dict[str, list[str]],
     return path
 
 
-def _events(path: Path, model_stem: str, mesh_names: set[str]) -> tuple[dict[str, bool], set[str], str, list[str]]:
+def _events(path: Path, model_stem: str, mesh_names: set[str]) -> tuple[dict[str, bool], set[str], list[str]]:
     raw = path.read_bytes()
     try:
         text = raw.decode('utf-8-sig')
@@ -115,7 +114,7 @@ def _events(path: Path, model_stem: str, mesh_names: set[str]) -> tuple[dict[str
                     defaults[mesh] = value
     if not any(section.tag == 'AnimationList' for section in root):
         _fail('incomplete_event_source', 'Event XML has no AnimationList')
-    return defaults, eventful, hashlib.sha256(raw).hexdigest(), sorted(absent_hidden)
+    return defaults, eventful, sorted(absent_hidden)
 
 
 def _eyes(obj: GameObject, game_objects: GameObjectData, mesh_names: set[str], *,
@@ -260,7 +259,7 @@ def _select_world_view(category: str, obj: GameObject, game_objects: GameObjectD
             else:
                 event_stem = 'pony_type01'
                 event_rule = 'reviewed-world-actor-pony_type01-default'
-        provenance['events'] = {'file': None, 'sha256': None,
+        provenance['events'] = {'file': None,
                                 'rule': event_rule, **event_source}
         opened, controlled, provenance['eyes'] = _eyes(obj, game_objects, set(mesh_names),
             allow_single_mesh_noop=wardrobe is None and len(mesh_names) == 1)
@@ -299,7 +298,7 @@ def _select_world_view(category: str, obj: GameObject, game_objects: GameObjectD
         # returns immediately for that marker. This is positive controller
         # evidence, not an inference from a locally absent XML resource.
         events_absent = True
-        provenance['events'] = {'file': None, 'sha256': None,
+        provenance['events'] = {'file': None,
                                 'rule': 'reviewed-pet-marker-bypasses-Pony-event-setup'}
     loader_pose = category == 'Pony' and not idle
     audited = (isinstance(csv_excluded_names, list)
@@ -336,8 +335,8 @@ def _select_world_view(category: str, obj: GameObject, game_objects: GameObjectD
     path, defaults, eventful, absent_hidden = None, {}, set(), []
     if category == 'Pony' and not events_absent:
         path = _event_file(Path(extracted_dir), event_stem, event_files=event_files)
-        defaults, eventful, digest, absent_hidden = _events(path, model_stem, set(mesh_names))
-        provenance['events'].update(file=path.name, sha256=digest)
+        defaults, eventful, absent_hidden = _events(path, model_stem, set(mesh_names))
+        provenance['events'].update(file=path.name)
     if wardrobe and set(wardrobe['mesh_visibility']).intersection(defaults):
         _fail('wardrobe_subobject_order_unverified', 'Wardrobe meshes also have SubObject defaults')
     if controlled.intersection(defaults):
@@ -392,7 +391,7 @@ def _ponybook_view(world: dict, *, obj: GameObject, game_objects: GameObjectData
     animation = obj.get('Animation') or {}
     path = _event_file(Path(extracted_dir), animation.get('Rig_MediumLOD'),
                        event_files=event_files, allow_missing=True)
-    defaults, eventful, digest, absent_hidden = ({}, set(), None, []) if path is None else _events(path, model_stem, set(mesh_names))
+    defaults, eventful, absent_hidden = ({}, set(), []) if path is None else _events(path, model_stem, set(mesh_names))
     # Reuse Luna's ordered fields; native config consumes Item zero, then
     # changes only the first literal lod0 to lod1. A later Item is not a fallback.
     data = obj.get('Eyes')
@@ -446,7 +445,7 @@ def _ponybook_view(world: dict, *, obj: GameObject, game_objects: GameObjectData
     idle, idle_rule = resolve(requested)
     world_events = set()
     if world['event_path'] is not None:
-        _, world_events, _, _ = _events(world['event_path'], model_stem, set(mesh_names))
+        _, world_events, _ = _events(world['event_path'], model_stem, set(mesh_names))
     all_events = eventful | world_events
     if constructor in all_events:
         _fail('ponybook_idle_requires_events', 'PonyBook constructor pose requires unsupported events: ' + constructor)
@@ -460,7 +459,7 @@ def _ponybook_view(world: dict, *, obj: GameObject, game_objects: GameObjectData
                              'fields': world['provenance']['clip_fields'].get(name, [])})
     if constructor not in selected: selected.append(constructor)
     if idle not in selected: selected.append(idle)
-    # Validate/hash both sources in the converter too. A missing world event
+    # Check both event sources in the converter. A missing world event
     # controller does not imply that a present PonyBook XML can be ignored.
     extra = [] if path is None or world['event_path'] == path else [path]
     fields = {name: list(values) for name, values in world['provenance']['clip_fields'].items()}
@@ -470,7 +469,7 @@ def _ponybook_view(world: dict, *, obj: GameObject, game_objects: GameObjectData
     provenance = {**world['provenance'], 'clip_fields': fields,
         'display': {'requested': 'ponybook-default', 'selected': 'ponybook-default',
                     'context': 'public default appearance; no player state or native UI controller'},
-        'ponybook': {'event_file': animation['Rig_MediumLOD'] + '.xml', 'event_sha256': digest,
+        'ponybook': {'event_file': animation['Rig_MediumLOD'] + '.xml',
                      'event_source': 'xml' if path is not None else 'missing-input-native-empty-controller',
                      'mesh_defaults': defaults, 'absent_default_hidden_meshes': absent_hidden,
                      'eyes': names, 'eye_controller_enabled': bool(names['Open']),

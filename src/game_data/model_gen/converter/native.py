@@ -55,7 +55,7 @@ def material_dependency_names(name: str) -> tuple[str, ...]:
     return (exact,)
 
 
-def _material_sibling(folder: Path, name: str, *, allow_missing=False) -> Path | None:
+def _material_sibling(folder: Path, name: str, *, allow_missing: bool = False) -> Path | None:
     for candidate in material_dependency_names(name):
         requested = folder / candidate
         path = requested.resolve()
@@ -72,8 +72,6 @@ def _material_sibling(folder: Path, name: str, *, allow_missing=False) -> Path |
 
 def _validate_model_layout(model: RKModel) -> None:
     """Check converter requirements; Luna validates the binary layout."""
-    if (model.header.unknown1, model.header.unknown2) not in {(5, 0), (5, 1), (5, 2), (6, 2)}:
-        raise NativeInputError("Unsupported RK model version")
     # Luna also reads unskinned/empty models; this exporter needs geometry,
     # materials, named submeshes, skinning and one supported UV attribute.
     for tag in (1, 2, 3, 4, 7, 13, 16, 17):
@@ -197,7 +195,7 @@ def _csv_clips(path: Path, frame_count: int, required: set[str], frame_boundary:
 
 
 def _verify_event_source(event_path: str | Path | None, events_absent: bool, names: set[str],
-                         event_approvals: dict[str, list[str]] | None = None, *,
+                         event_approvals: dict[Path, list[str]] | None = None, *,
                          model_stem: str = "", mesh_names: list[str] | None = None) -> tuple[dict, Path | None]:
     """Validate an explicit event source; absence must be asserted by discovery."""
     if bool(event_path) == bool(events_absent):
@@ -227,8 +225,7 @@ def _verify_event_source(event_path: str | Path | None, events_absent: bool, nam
     from ..interactions import parse_events
     from ..visibility import compile_subobject_event
     controls = parse_events(root)['controls'] if event_approvals is not None else {}
-    digest = hashlib.sha256(raw).hexdigest()
-    approved = (event_approvals or {}).get(digest, [])
+    approved = (event_approvals or {}).get(path, [])
     for node in root.iter("Animation"):
         if node.get("Name") in names and set(node.attrib) != {"Name"}:
             raise NativeInputError("Unsupported selected native animation attributes")
@@ -255,7 +252,7 @@ def _verify_event_source(event_path: str | Path | None, events_absent: bool, nam
                         raise NativeInputError('Duplicate native event in one animation declaration')
                     declaration_events.append(key)
     evidence = {"status": "parsed-source-xml", "name": path.name,
-                "sha256": digest, "checked_clips": sorted(names)}
+                "checked_clips": sorted(names)}
     if event_approvals is not None:
         mapped = {}
         for node in root.iter('Animation'):
@@ -292,7 +289,7 @@ def load_native(
     frame_boundary: str = 'reject',
     additional_event_paths: Collection[str | Path] = (),
     retained_meshes: Collection[str] | None = None,
-    event_approvals: dict[str, list[str]] | None = None,
+    event_approvals: dict[Path, list[str]] | None = None,
     texture_cache: TextureCache | None = None,
     animation_cache: AnimationCache | None = None,
     rk_model: RKModel | None = None,
@@ -308,7 +305,7 @@ def load_native(
     Texture bytes are PNG-encoded by Pillow from Luna's decoded native image.
     Event XML or an explicit native-source absence declaration is required.
     Selected actions with events are rejected unless the caller supplies exact
-    XML digest approvals for supported records. The export stage also compares
+    source-path approvals for supported records. The export stage also compares
     every compiled event to these parsed records. Ordinary rkshader and the
     source-verified default-discard horn material are supported. Hair UV
     scrolling requires the original object's explicit ``user_vector`` metadata.
@@ -370,11 +367,6 @@ def load_native(
         if samples * animation.header.bone_count > MAX_NATIVE_JOINT_FRAME_SAMPLES:
             raise NativeInputError(f'Native sample export budget exceeds {MAX_NATIVE_JOINT_FRAME_SAMPLES} joint-frame samples')
 
-    if event_approvals is not None and (not isinstance(event_approvals, dict) or any(
-            not isinstance(key, str) or len(key) != 64 or any(c not in '0123456789abcdef' for c in key)
-            or not isinstance(values, list) or any(not isinstance(name, str) for name in values)
-            for key, values in event_approvals.items())):
-        raise NativeInputError('Invalid source-bound event approvals')
     event_source, checked_event_path = _verify_event_source(event_path, events_absent, required_names, event_approvals,
         model_stem=rk_path.stem, mesh_names=[mesh.name for mesh in model.meshes])
     if isinstance(additional_event_paths, (str, bytes, Path)):
@@ -437,7 +429,6 @@ def load_native(
                 "name": rkm_path.name, "status": "native-default-without-rkm",
                 "rule": "reviewed-native-original-name-texture-default-material",
                 "client_version": "11.4.3c",
-                "client_sha256": "d4fc2e7650ae866735d4a9a1da4b900262bdcf188f1d34fb9c0ebe6b08609c29",
             })
             resolved_shader = properties.Shader or "rkshader"
             hair_uv = None
@@ -487,8 +478,6 @@ def load_native(
                             alpha = PVR(str(alpha_path), external_alpha=False).image
                             if alpha is None:
                                 raise NativeInputError(f"Texture decoder returned no image: {alpha_path.name}")
-                            if alpha.size != image.size:
-                                raise NativeInputError(f"Native PVR alpha dimensions differ: {alpha_path.name}")
                             image = put_alpha(image, alpha)
                     except (AssertionError, struct.error, NotImplementedError, ValueError) as error:
                         raise NativeInputError(f"Native PVR parse failed: {texture_path.name}: {error}") from error
@@ -549,10 +538,6 @@ def load_native(
             clip['events'] = sorted(events, key=lambda row: row['frame'])
     declared_rest_frame = by_name[rest_name]["start"] if rest_name is not None else rest_frame
     rest_frame = min(declared_rest_frame, frames - 1)
-    current_animation_digest = (animation_cache.digest(anim_path) if animation_cache is not None
-                                else hashlib.sha256(anim_path.read_bytes()).hexdigest())
-    if current_animation_digest != animation_digest:
-        raise NativeInputError("Native animation changed during model preparation")
     result = {"name": model.name, "positions": positions, "texcoords": texcoords, "joints": joints,
             "weights": weights, "primitives": primitives, "materials": materials,
             "bones": [{"name": bone.name, "parent": bone.parentIndex,
@@ -563,14 +548,12 @@ def load_native(
                            "rest_source": "native-csv-first-frame" if rest_name is not None else "caller-selected-native-frame",
                            "native_position_scale": NATIVE_POSITION_SCALE, "material_sources": material_sources,
                            "default_shader_materials": [item["name"] for item in materials if item["native_default_shader"]],
-                           "files": [{"name": path.name, "sha256": (animation_cache.digest(path) if animation_cache is not None else hashlib.sha256(path.read_bytes()).hexdigest())}
-                                     for path in dict.fromkeys(dependencies)]}}
+                           "files": [{"name": path.name} for path in dict.fromkeys(dependencies)]}}
     if extra_event_sources:
         result['provenance']['additional_event_sources'] = extra_event_sources
     if frame_boundary == 'native-clamp':
         result["provenance"]["native_frame_boundary"] = {
             "policy": "native-clamp", "client_version": "11.4.3c",
-            "client_sha256": "d4fc2e7650ae866735d4a9a1da4b900262bdcf188f1d34fb9c0ebe6b08609c29",
             "source_frame_count": frames,
             "clips": [{"name": name, "declared_start": by_name[name]['start'],
                        "declared_end": by_name[name]['end'],

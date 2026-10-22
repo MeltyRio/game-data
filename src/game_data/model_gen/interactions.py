@@ -5,7 +5,6 @@ availability alone never establishes a model/library association. That remains
 owned by discovery; this stage only uses that association's validated CSV.
 """
 from collections.abc import Callable
-import hashlib
 from pathlib import Path
 import re
 from typing import TYPE_CHECKING
@@ -55,7 +54,7 @@ def read_events(path: Path) -> dict:
         raise InteractionError('DTD/entity declarations are unsupported')
     text = re.sub(r'^\s*<\?xml[^>]*\?>', '', text)
     root = ET.fromstring('<Events>' + text + '</Events>')
-    return {'sha256': hashlib.sha256(raw).hexdigest(), **parse_events(root)}
+    return parse_events(root)
 
 
 def parse_events(root: ET.Element) -> dict:
@@ -214,8 +213,8 @@ def prepare_interactions(selection: dict, category: str, obj: GameObject, *,
         if compiled: events[name] = compiled
         retained |= needed
         subobjects.update(i for event in compiled if event['type'] == 'SubObject' for i in event['meshes'])
-        for _, document in documents:
-            approvals.setdefault(document['sha256'], []).append(name)
+        for path, _ in documents:
+            approvals.setdefault(path.resolve(), []).append(name)
     click_names = [name for name in requested_clicks if name in selected]
     profile = {'version': 1, 'clickAnimations': click_names}
     model_profile = {'version': 1}
@@ -236,6 +235,6 @@ def prepare_interactions(selection: dict, category: str, obj: GameObject, *,
                   interactions=profile, model_interactions=model_profile, animation_events=events, event_approvals=approvals)
     result['excluded_clips'] = [row for row in result['excluded_clips'] if row['name'] not in selected]
     result['provenance']['interactions'] = {'diagnostics': diagnostics, 'nativeClickCandidates': requested_clicks,
-        'sources': [{'file': path.name, 'sha256': doc['sha256']} for path, doc in documents],
+        'sources': [path.name for path, _ in documents],
         'clickPolicy': 'viewer randomly chooses from native allowed branches; remote-service gate and directional choice are not simulated'}
     return result

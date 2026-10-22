@@ -6,7 +6,6 @@ The report belongs in raw/, never in the public dist/ or models_3d.json.
 """
 from collections import Counter
 from collections.abc import Callable
-import hashlib
 import json
 import struct
 from pathlib import Path
@@ -45,11 +44,6 @@ def _file(folder: Path, name: str, name_index: dict[str, list[str]]) -> Path:
     if variants != [name]:
         raise AssociationError('Ambiguous or non-exact dependency spelling: ' + name)
     return path
-
-
-def _sha(path: Path) -> str:
-    with path.open('rb') as stream:
-        return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 
 def _animation(path: Path) -> dict:
@@ -286,13 +280,10 @@ def write_association_report(game_objects: GameObjectData, extracted_dir: str | 
         raise AssociationError('Association audit must stay outside the public output directory')
     if report is None:
         report = discover_associations(game_objects, folder)
-    report['source_tables'] = {name: _sha(folder / name) for name in
-                             ['gameobjectdata.xml', 'gameobjectcategorydata.xml', 'shopdata.xml']}
+    report['source_tables'] = ['gameobjectdata.xml', 'gameobjectcategorydata.xml', 'shopdata.xml']
     campaign = folder / 'defaultGameCampaign.json'
     report.setdefault('campaign', {})['present'] = campaign.is_file()
     report['campaign'].setdefault('render_overrides_reviewed', False)
-    if campaign.is_file():
-        report['campaign']['sha256'] = _sha(campaign)
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=output.parent, delete=False) as stream:
         temp = Path(stream.name)

@@ -55,7 +55,7 @@ references are uploaded.
   libraries, outfit ownership and attached actors. It does not decode RK models
   or hash resource files. Each selected RK is read and validated once, immediately
   before appearance selection, and reused by conversion. Bone compatibility and
-  material checks remain in conversion; cache and output digests are unchanged.
+  material checks remain in conversion. Only ANIM/cache identities and generated asset keys require hashes.
 - `model_gen/selection.py`: choose a documented initial viewer pose, exact
   visible meshes and native preferred actions.
 - `model_gen/interactions.py`: evaluate the associated library and compile each
@@ -132,7 +132,9 @@ complete-sequence rule above because their controller uses numeric indices.
 
 Skeletal animation bytes are shared independently of model events. The cache key
 includes the exact ANIM content, indexed rig hierarchy, clip name/range/FPS,
-frame-boundary policy and compiler identity. Different model bind matrices remain
+frame-boundary policy, encoder version and decoder dependencies. Bump
+`AnimationCache`'s encoder version when skeletal encoding changes; Python source
+files are not hashed. Different model bind matrices remain
 in their model GLBs. Cached bytes carry no model-specific event list: native XML
 and mesh targets are checked separately for every model, then attached to its
 catalogue animation reference as described below.
@@ -153,10 +155,8 @@ still uploads and validates the selected GLBs before publishing the catalogue an
 root manifest. Only after that succeeds is the optional cache index updated with
 current published animation references, including child actors. Index/asset read
 failures fall back to local conversion; index write failure is reported without
-invalidating the completed asset publication. If downloaded bytes have the wrong
-content digest, sync repairs that referenced asset even when its remote hash
-metadata is unchanged. Explicit overrides remain protected; a failed repair
-prevents catalogue, manifest and cache-index publication. Local builds without
+invalidating the completed asset publication. The uploader retains its existing
+hash metadata and explicit override behavior. Local builds without
 upload do not access this S3 cache. `--skip model_gen` skips cache loading and
 index publication.
 
@@ -258,7 +258,7 @@ Base Book selection retains World-validated, explicitly declared town actions,
 excluding event-bearing actions until the interaction compiler below verifies
 all their events. Constructor pose and later Book idle retain their existing
 strict checks against both contexts. The converter independently
-validates and hashes all present sources before producing a bundle, including
+checks all selected event sources before producing a bundle, including
 when the World branch has a positively absent controller. Required World XML
 remains mandatory even when Book uses an empty controller. Unknown events remain
 unsupported.
@@ -310,8 +310,8 @@ price/Enabled overrides are not reinterpreted as mesh visibility. Changes to
 
 Luna owns ARK, GameObjectData, RK, RKM, PVR and ANIM parsing and is reused at
 those boundaries. The locked RK reader validates binary section layouts and
-mesh references; game-data checks the parsed model for its supported version,
-skinning and UV requirements without rereading the file. Its RK submesh `unknown`
+mesh references; game-data checks the parsed model for its required skinning
+and UV layout without rereading the file or gating decoded RK header versions. Its RK submesh `unknown`
 value has no established visibility meaning; its glTF export does not implement
 game-object eye/wardrobe controllers.
 The ANIM adapter now consumes Luna's decoded `Anim.raw_frames`, converts its
@@ -389,11 +389,11 @@ references share a row. Different mesh targets or events retain distinct entries
 while referencing the same skeletal GLB. `preferredAnimations` remains a list of
 native clip IDs. This avoids repeating entire library metadata for every model.
 
-Readers also accept legacy inline animation references. Schema 1 models,
-schema 2 material clocks/additional actors and schema 3 embedded-event interaction
-profiles remain readable. Additional actors use nested model/animation references with
+Standalone converter bundles use inline animation references. Schema 1 models,
+schema 2 material clocks/additional actors and schema 3 interaction profiles
+remain supported; animation events use only the v2 catalogue binding. Additional actors use nested model/animation references with
 their own rig key; shared hash assets still use the same namespace. Private source
-names, hashes, selection evidence and exclusions go to
+names, selection evidence and exclusions go to
 `raw/model-associations.json`, never public dist.
 
 ### Native interaction profile
@@ -414,7 +414,7 @@ Interactive rows add
 Catalogues with model-specific animation event bindings or SubObject mesh controls
 use `schemaVersion: 4`;
 consumers must support that version before these catalogues are published.
-Schema 3 remains supported for the earlier embedded-event profile and models
+Schema 3 remains supported for models
 whose supported interactions need neither separate event bindings nor SubObject
 controls.
 Every referenced ID must be in that row's successfully converted animations.
@@ -427,23 +427,26 @@ profile-aware reader explicitly adopts them into the default scene using the
 same skeleton. Ordinary glTF readers keep the previous default appearance.
 The reader must resolve these nodes before rendering or disposing the asset.
 
-Normal cached generation emits an event-free skeletal GLB and adds
-`eventBinding: {version: 1, events: [...]}` to each model's event-bearing animation
-reference. This allows byte-identical motion to share one immutable asset across
-models with different mesh targets or event sequences. Older GLBs with
-`extras.atpClip.eventProfile = "ponybook-v1"` and embedded `events` remain readable;
-direct uncached conversion can still produce that earlier form.
+Cached and uncached generation emit event-free skeletal GLBs and add
+`eventBinding: {version: 2, events: [...], visibility: [...]}` to event-bearing
+animation references. Motion can share one asset across models while bindings
+retain each model's mesh names and event sequence. Version 2 is the initial
+production binding format; animation GLBs contain no embedded events. Coordinate
+the first resource publication with the matching ATP viewer.
 
-Supported records are `EyeSet` (state, EnableBlink), `Emitter` (an embedded effect
-key), and `SubObject` (native mesh indices and visibility). A SubObject event
-must resolve its ID in that exact model's declaration in every contributing XML
-source. All exact-name mesh matches are retained; another model's ID, a similarly
-named mesh or another event file's declaration cannot substitute for missing
-evidence. Default visibility remains the validated initial mask, and the viewer
-must restore it when the action finishes or is canceled.
+The producer resolves native SubObject IDs to that exact model's mesh names and
+folds SubObject/EyeSet writes into `{meshName, times, values}` curves. Times are
+seconds (`frame / fps`), values are booleans, and time zero starts from the model
+default. Same-time writes keep native source order; later keys remain even if
+their values repeat. All exact-name mesh matches are retained. Missing targets
+cannot be replaced by another model's ID or another event file's declaration.
+The callback `events` array retains only EyeSet expression/blink settings and
+Emitter effect keys. ATP builds Boolean tracks directly from `visibility` and
+uses that same array when baking downloads. Default visibility is restored when
+an action finishes or is canceled.
 
 Event frames are native CSV-relative integer indices, independent of fractional
-pose interpolation. Source XML digests bind the compiler's approvals, and the
+pose interpolation. Explicit XML paths bind the compiler's approvals, and the
 converter independently checks every exported event against those sources. An
 unsupported event, missing target/eye state/effect dependency, conflict or
 out-of-range event frame excludes that whole action with diagnostics; no bare
@@ -466,8 +469,7 @@ normal generator retains its independently verified static model/event-free
 actions and records `interaction-assets-unavailable`; it publishes no interaction
 profile for that fallback. A failure of the original static conversion still
 excludes that model. Fixed model URLs, cache revalidation and non-atomic upload
-semantics are unchanged. An older catalogue/new overwritten file remains a
-digest failure rather than a silently accepted mismatched model.
+semantics are unchanged; frontend and resources should be published together.
 
 `references_resolved` means explicit resource files and usable CSV references
 were found (with resolved outfit ownership); it does not mean that the RK contents
@@ -488,15 +490,14 @@ One bad supported input is excluded with its reason; it cannot create a success
 row or partial bundle. If all requested identities fail, the local generation
 stage preserves a previous catalogue. Source validation and read errors before
 output validation exclude the affected identity. Unexpected programming errors,
-asset integrity conflicts, staging writes and publication errors abort the stage.
-All bundles are validated before local publication. Publication
+staging writes and publication errors abort the stage. Publication
 writes GLBs before replacing the catalogue, allowing fixed Object ID files to
 be overwritten. Individual file replacement is atomic; the complete directory
 is not. A later write failure can leave an old catalogue with replaced models.
 Unreferenced local asset paths in either format are a **dry-run report only**; no deletion occurs.
 This local guarantee does not undo the existing full build's earlier dist clean.
 
-Sync validates paths, sizes, hashes and compatible catalogue references before
+Sync validates paths, sizes and compatible catalogue references before
 cloud calls. Fixed model keys use `Cache-Control: no-cache`; immutable animations
 and anonymous models keep the existing 30-day cache. Unchanged bytes and matching
 headers skip upload. Every 3D upload result is observed; 3D put/copy failures prevent
@@ -505,7 +506,7 @@ so this is not a transaction across the complete CDN. Old immutable assets are n
 deleted, and skipped generations do not invent remote cleanup. Production
 retention policy still needs upstream agreement. Only the current fixed-address
 model version is supported: a stale catalogue or a partial failed upload can
-temporarily fail digest verification. No automatic restoration or new version
+temporarily use mismatched model metadata. No automatic restoration or new version
 management layer is introduced.
 
 ## Offline tests and local model review
@@ -640,7 +641,7 @@ print("Available animations:", ", ".join(clip["name"] for clip in animations))
 PY
 ```
 
-This is an availability check; the viewer separately verifies GLB sizes, hashes
+This is an availability check; the viewer separately checks GLB sizes, structure
 and rig metadata. A successful build can exclude unsupported objects or actions.
 For a missing ID, inspect `generation.excluded` and `identities[ObjectID]` in the
 private `raw/model-associations.json` report. Do not substitute a similar model
@@ -651,3 +652,13 @@ linked viewer instructions. Select Twilight and click a listed animation; the
 parent starts at rest rather than autoplaying. No domain, bucket or deployment
 is needed. Game resources and generated GLBs are not bundled with either PR;
 keep them private and do not sync a partial review directory to production.
+
+### Native component skin weights
+
+Native weights need not sum to one. Conversion retains Luna's original components
+and bone indices in `_NATIVE_WEIGHTS` / `_NATIVE_JOINTS`; a separate normalized
+standard pair satisfies glTF transport requirements. ATP restores the custom pair
+after GLTFLoader normalization. Mesh selection, wardrobe, animation binding and
+visibility v2 retain their existing contracts. Client GLB downloads keep both
+pairs. Ordinary glTF importers, including Blender, do not automatically reproduce
+non-unit native deformation from the standard pair; see the converter README.

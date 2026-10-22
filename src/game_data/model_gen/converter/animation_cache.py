@@ -14,7 +14,7 @@ import numpy as np
 
 from .core import Rig, clip_from_native
 from .gltf import animation_glb
-from .native_animation import NativeAnimation, read_animation
+from .native_animation import NativeAnimation, NativeClip, read_animation
 from ...model_catalogue import animation_assets, resolve_animation
 from ...model_paths import asset_path, asset_path_matches
 
@@ -33,21 +33,18 @@ class AnimationCache:
 
     The remote index points at ordinary immutable GLBs published by sync. It is
     written only after sync succeeds; this class never uploads those resources.
-    Compiler source, NumPy and Luna versions invalidate entries when encoding changes.
+    An explicit encoder version plus NumPy/Luna versions invalidate compiled entries.
     """
-    def __init__(self, directory: str | Path, *, version: str = 'skeletal-glb-v1',
+    def __init__(self, directory: str | Path, *, version: str = 'skeletal-glb-v2',
                  memory_bytes: int = 64 * 1024**2, decoded_bytes: int = 128 * 1024**2) -> None:
         self.directory = Path(directory)
         self.memory_bytes, self.decoded_bytes = memory_bytes, decoded_bytes
-        compiler = [hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
-                    for name in ('core.py', 'gltf.py', 'native_animation.py', 'animation_cache.py')]
         luna = metadata.distribution('luna-kit')
-        self.version = [version, np.__version__, luna.version, luna.read_text('direct_url.json'), *compiler]
+        self.version = [version, np.__version__, luna.version, luna.read_text('direct_url.json')]
         self.memory: OrderedDict[str, tuple[dict, bytes]] = OrderedDict()
         self.decoded: OrderedDict[str, NativeAnimation] = OrderedDict()
-        self.fingerprints: dict[Path, tuple[tuple, str]] = {}
+        self.fingerprints: dict[Path, str] = {}
         self.records: dict[str, dict] = {}
-        self.invalid_remote_assets: set[str] = set()
         self.client: S3Client | None = None
         self.bucket: str | None = None
         self.stats = dict(memory_hits=0, disk_hits=0, remote_hits=0, misses=0,
@@ -55,16 +52,11 @@ class AnimationCache:
                           compile_seconds=0., decode_seconds=0.)
 
     def digest(self, path: Path) -> str:
-        """Hash each unchanged file once per build; stat changes invalidate it."""
-        stat = path.stat()
-        signature = (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
-        previous = self.fingerprints.get(path)
-        if previous is not None and previous[0] == signature:
-            return previous[1]
-        with path.open('rb') as stream:
-            digest = hashlib.file_digest(stream, 'sha256').hexdigest()
-        self.fingerprints[path] = (signature, digest)
-        return digest
+        """Identify each ANIM once; extracted sources stay fixed during a build."""
+        if path not in self.fingerprints:
+            with path.open('rb') as stream:
+                self.fingerprints[path] = hashlib.file_digest(stream, 'sha256').hexdigest()
+        return self.fingerprints[path]
 
     def read_animation(self, path: Path) -> NativeAnimation:
         key = self.digest(path)
@@ -74,8 +66,6 @@ class AnimationCache:
             return self.decoded[key]
         start = perf_counter()
         result = read_animation(path)
-        if self.digest(path) != key:
-            raise ValueError('Native animation changed during decoding')
         self.stats['decode_seconds'] += perf_counter() - start
         self.stats['decoded'] += 1
         size = result.translations.nbytes + result.rotations_xyzw.nbytes
@@ -121,14 +111,13 @@ class AnimationCache:
         warnings.warn(f'{message}: {type(error).__name__}: {error}', RuntimeWarning, stacklevel=2)
 
     @staticmethod
-    def _validate(ref: dict, data: bytes, rig: Rig, row: dict, named: bool) -> dict:
-        digest = hashlib.sha256(data).hexdigest()
+    def _validate(ref: dict, data: bytes, rig: Rig, row: NativeClip, named: bool) -> dict:
         if (not isinstance(ref, dict) or set(ref) != {'path', 'sha256', 'bytes', 'rigKey', 'id', 'name', 'duration'}
-                or ref.get('sha256') != digest or ref.get('bytes') != len(data)
+                or ref.get('bytes') != len(data)
                 or ref.get('rigKey') != rig.key or ref.get('id') != row['name']
                 or ref.get('name') != row['name']
                 or ref.get('duration') != len(row['translations']) / row['fps']
-                or not asset_path_matches(ref.get('path'), digest, row['name'] if named else None)
+                or not asset_path_matches(ref.get('path'), ref.get('sha256'), row['name'] if named else None)
                 or len(data) < 20 or struct.unpack_from('<4sII', data) != (b'glTF', 2, len(data))):
             raise ValueError('Invalid animation cache entry')
         length, kind = struct.unpack_from('<II', data, 12)
@@ -169,12 +158,11 @@ class AnimationCache:
                 except OSError as error:
                     self._error('Could not remove partial animation cache entry', error)
 
-    def compile(self, native: dict, row: dict, rig: Rig, *, named: bool) -> tuple[dict, bytes]:
+    def compile(self, native: dict, row: NativeClip, rig: Rig, *, named: bool) -> tuple[dict, bytes]:
         # Rig includes the exact ANIM digest and parent layout. Bone names and
         # bind matrices are model-only; the GLB uses ordinal joint names.
         # XML events/mesh masks are validated per model and emitted separately.
-        key = hashlib.sha256(_json([self.version, rig.key, rig.parents,
-            native['provenance']['animation_sha256'], row['name'], row['start'], row['end'], row['fps'],
+        key = hashlib.sha256(_json([self.version, rig.key, row['name'], row['start'], row['end'], row['fps'],
             native['provenance'].get('native_frame_boundary', {}).get('policy', 'reject'), named])).hexdigest()
         if key in self.memory:
             self.stats['memory_hits'] += 1
@@ -210,14 +198,7 @@ class AnimationCache:
                 response = self.client.get_object(Bucket=self.bucket, Key=ref['path'])
                 with response['Body'] as body:
                     data = body.read()
-                try:
-                    ref = self._validate(ref, data, rig, row, named)
-                except ValueError:
-                    # Bad index metadata alone does not prove the GLB is corrupt.
-                    # Sync must not trust stale hash metadata for a known bad body.
-                    if hashlib.sha256(data).hexdigest() != ref['sha256']:
-                        self.invalid_remote_assets.add(ref['path'])
-                    raise
+                ref = self._validate(ref, data, rig, row, named)
                 self.stats['remote_hits'] += 1
                 self._write(key, ref, data)
                 self._remember(key, ref, data)
@@ -227,7 +208,6 @@ class AnimationCache:
         self.stats['misses'] += 1
         start = perf_counter()
         clip = clip_from_native(row, rig)
-        clip.events = None
         data = animation_glb(clip)
         self.stats['compile_seconds'] += perf_counter() - start
         self.stats['compiled'] += 1
@@ -235,9 +215,6 @@ class AnimationCache:
         ref = dict(path=asset_path(digest, row['name'] if named else None), sha256=digest,
                    bytes=len(data), rigKey=rig.key, id=row['name'], name=row['name'],
                    duration=len(row['translations']) / row['fps'])
-        # Until sync repairs this path, a disk hit in the next build would hide
-        # the remote corruption if the upload failed. Memory reuse is still safe.
-        if ref['path'] not in self.invalid_remote_assets:
-            self._write(key, ref, data)
+        self._write(key, ref, data)
         self._remember(key, ref, data)
         return dict(ref), data

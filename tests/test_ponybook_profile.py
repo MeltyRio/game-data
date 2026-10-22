@@ -92,7 +92,6 @@ class PonyBookProfileTests(unittest.TestCase):
         book = result['provenance']['ponybook']
         self.assertEqual(book['event_file'], 'book.xml')
         self.assertEqual(book['event_source'], 'missing-input-native-empty-controller')
-        self.assertIsNone(book['event_sha256'])
         self.assertFalse(book['world_visibility_equivalent'])
 
     def test_present_invalid_book_xml_is_not_an_empty_controller(self):

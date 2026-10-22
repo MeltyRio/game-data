@@ -29,7 +29,6 @@ if TYPE_CHECKING:
 
 CONTROLLER = 'native-first-then-random-v1'
 CLIENT_VERSION = '11.4.3c'
-CLIENT_SHA256 = 'd4fc2e7650ae866735d4a9a1da4b900262bdcf188f1d34fb9c0ebe6b08609c29'
 
 
 def _require(condition: object, detail: str) -> None:
@@ -165,7 +164,7 @@ def attach_additional_actor(obj: GameObject, owner_bundle: AssetBundle, identity
     public = {'model': child_row, 'transform': matrix.T.reshape(-1).tolist(),
               'parentRoot': root_ordinal, 'controller': CONTROLLER}
     private = {'controller': CONTROLLER, 'client_version': CLIENT_VERSION,
-               'client_sha256': CLIENT_SHA256, 'child_source': child_bundle.provenance,
+               'child_source': child_bundle.provenance,
                'root_field': 'Model.RootBone', 'parent_root': root_ordinal,
                'rest_root_native': root.tolist(), 'owner_scale': owner_scale,
                'child_scale': child_scale, 'offset': [offset_x, offset_y], 'lock_rotate': locked,

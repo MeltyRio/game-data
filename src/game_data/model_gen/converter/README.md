@@ -33,7 +33,7 @@ the rest clip using the same strict event checks as `event_path`. Missing or
 malformed XML, unsupported selected attributes and selected native events fail
 conversion by default. `events_absent=True` applies only to the primary source and never
 skips these additional checks. Repeated resolved paths are checked once; source
-names and hashes remain private provenance. The default empty collection
+names remain private provenance. The default empty collection
 preserves the existing single-source API and does not change GLB serialization.
 
 The normal stage uses these inputs for its `ponybook-preferred` display policy:
@@ -56,20 +56,25 @@ bundles use `schemaVersion: 1`; a required native material UV clock uses version
 The surrounding generator also uses version2 for declared additional actors.
 An explicit, source-bound native interaction profile uses version3. Its caller
 supplies retained meshes, native eye indices, click/dizzy IDs, compiled events
-and exact source XML digest approvals. The converter validates the retained
+and explicit source XML path approvals. The converter validates the retained
 indices and compares every compiled event to its parsed original record. Unknown
 or omitted events are errors. Hidden eye nodes remain outside all default scenes
 and are listed in `extras.atpInteractions.hiddenNodes`; consumers must attach
 these nodes to the default scene before rendering or releasing them. Animation
-GLBs carry `atpClip.eventProfile = "ponybook-v1"` and ordered `events` without
-changing standard STEP channels or native interpolation samples. The normal
-pipeline supplies these low-level arguments automatically; users do not maintain
-per-character maps. See the [pipeline contract](../../../../docs/3d-resource-associations.md#native-interaction-profile).
-Normal generation uses the cached export path: skeletal GLBs omit model events,
-which stay on catalogue animation references. It then emits schema 4 with an
-`animationAssets` table and per-model integer indices, deduplicating exact
-references including event bindings. Standalone bundles retain inline references.
-The ATP consumer supports both representations and legacy embedded events.
+GLBs contain only standard STEP channels and native interpolation samples.
+Both cached and uncached conversion emit `eventBinding: {version: 2, events: [...],
+visibility: [...]}` on catalogue animation references. The generator converts
+SubObject and EyeSet writes to `{meshName, times, values}` visibility curves:
+original mesh names, seconds (`frame / fps`), and booleans. Defaults and same-time
+writes follow native source order; later repeated values remain explicit.
+Only EyeSet expression/blink settings and Emitter records remain in `events`.
+ATP consumes the same curves for preview and client-side GLB export, without a
+frontend conversion or legacy embedded-event fallback.
+The normal pipeline supplies these low-level arguments automatically; users do
+not maintain per-character maps. See the [pipeline contract](../../../../docs/3d-resource-associations.md#native-interaction-profile).
+Normal generation emits schema 4 with an `animationAssets` table and per-model
+integer indices, deduplicating exact references including event bindings.
+Standalone bundles retain inline references with the same binding format.
 Older readers must reject the new version rather than show an incomplete scene. Each row has `path`, `sha256`, `bytes`, `rigKey` and `animations`.
 Animation rows also have `id`, `name` and `duration` in seconds. Paths are asset
 keys resolved by ATP's existing `createAssetUrl`. Normal generation uses
@@ -88,8 +93,8 @@ The standalone `convert_native` API keeps legacy flat hash paths by default.
 `animation_filenames=True` selects named, content-addressed animation paths.
 These options change only asset keys, never GLB bytes or catalogue identity.
 Readers and sync also accept earlier flat and digest-directory model paths.
-Named files must match their exact catalogue Object ID or animation ID; digests,
-sizes and rig compatibility are verified against the actual data.
+Named files must match their exact catalogue Object ID or animation ID.
+Consumers check sizes and rig compatibility; they do not recompute GLB digests.
 
 Fixed model keys represent only the current version and use `Cache-Control:
 no-cache`. Animations and anonymous models retain the existing 30-day cache.
@@ -119,7 +124,7 @@ without inventing an RKM or substituting a PNG or another texture name. Empty
 source fields preserve native `rkshader`, opaque blending, culling, depth
 write/test and repeat wrapping; Luna's different dataclass cull/depth defaults
 are not copied. Private material provenance records `native-default-without-rkm`
-and hashes only actual source files. Existing RKM files remain authoritative;
+and lists only actual source files. Existing RKM files remain authoritative;
 malformed, unreadable, non-file or escaped paths are errors. A missing file in
 an incomplete or failed extraction is not proof of native absence. The original
 first-material RKM required for the separately reviewed hair clock stays strict.
@@ -127,9 +132,8 @@ first-material RKM required for the separately reviewed hair clock stays strict.
 The locked Luna RK reader validates binary section bounds, record sizes and
 references, and reads each submesh at its declared face-index offset. Appearance
 selection and conversion reuse that parsed model. The converter checks its own
-requirements: supported header pairs (5.0, 5.1, 5.2 and 6.2), geometry, skinning,
-one supported UV attribute and a supported bone hierarchy. These are conversion
-limits, not a claim that Luna cannot read other valid RK models.
+requirements: geometry, skinning, one supported UV attribute and a supported
+bone hierarchy. Successfully decoded RK header fields are not version gates.
 
 ANIM 5.2 uses Luna's `Anim.raw_frames` through a thin adapter, retaining the
 converter's little-endian type 0/1/4 limits:
@@ -152,13 +156,8 @@ validity checks. Luna's broader type 2/3 support does not expand this converter'
 accepted formats. Existing synthetic tests cover the adapter's numerical and
 format boundaries; they do not prove every game asset's semantics.
 
-Unsupported or invalid PVR decoding is reported as a native-input failure so
-normal generation can exclude that object. A required external alpha image must
-match the base image dimensions; the converter rejects a mismatch instead of
-using Luna's default behavior of ignoring it. This is a stricter conversion
-validation policy, not a claim of a Luna defect or a known current-game failure.
-Embedded alpha still takes precedence, and valid same-size sidecars use Luna's
-pixel conversion unchanged.
+PVR decoding and external-alpha composition reuse Luna's behavior. Embedded
+alpha takes precedence; decoder failures exclude the affected object.
 
 ## Encoded texture cache
 
@@ -169,12 +168,12 @@ outside `dist` and is never included in the published asset closure.
 
 Keys include exact primary/alpha file content, the conversion recipe, Luna's
 version/VCS origin, Pillow, texture2ddecoder and PNG zlib versions. Entries contain
-encoded PNG bytes and dimensions, not retained decoded images. A hit verifies
-length, digest and PNG chunk checksums without expanding pixels. Writes replace
+encoded PNG bytes and dimensions, not retained decoded images. A hit checks
+the entry header and length without decoding or hashing the PNG again. Writes replace
 one complete entry atomically, prune oldest entries to the byte budget, and skip
-entries larger than 64 MiB. Corrupt entries or cache I/O failures fall back to
+entries larger than 64 MiB. Invalid headers, truncated entries or cache I/O failures fall back to
 source conversion; generation diagnostics count hits, misses, writes, invalid
-entries and I/O errors. Source changes during decoding cannot populate an old key.
+entries and I/O errors. Extracted inputs must stay fixed for the duration of a build.
 Bump the `native-png-v1` recipe in `native.py` when conversion semantics change.
 
 One local Python 3.14 measurement across 12 real PVR textures (64/512/1024px,
@@ -191,9 +190,9 @@ it does not establish full-generation speed or physical cold-disk performance.
 - A proper 180-degree X rotation maps native negative-Y-up to glTF positive-Y-up.
   RK triangles reverse winding for glTF's counterclockwise convention. UVs and
   decoded texture pixels retain the original converter's behavior.
-- Four influences are validated. Only UNORM16 normalization residue is
-  corrected. Repeated positive influences for one joint are merged without
-  changing skinning. Mixed triangles containing zero-weight vertices remain
+- Four native influences are retained without sum normalization, including
+  UNORM16 quantization residue. Standard glTF transport merges repeated positive
+  joint influences and normalizes a separate copy. Mixed triangles containing zero-weight vertices remain
   unsupported. The strictly bounded all-zero case is described below.
 - Ordinary `rkshader` uses unlit textured materials with source culling,
   wrapping and alpha mode. Depth-write/test switches remain material extras
@@ -244,8 +243,7 @@ No weight is assigned to a guessed bone, and rig keys and animation GLBs retain
 the existing contract.
 
 This branch applies to the supported `rkshader` material profile without requiring
-shader source files. A triangle mixing zero and nonzero vertices or a nonzero
-normalization error remains unsupported.
+shader source files. A triangle mixing zero and nonzero vertices remains unsupported by this path.
 
 The evidence is the Android 11.4.2a GPU material/skin-buffer path plus the
 reviewed 11.4.3c shader sources; the CPU skinning fallback and future source
@@ -345,3 +343,50 @@ rest sample per joint. The checks run before expanded index/transform allocation
 They are exporter limits, not claims about the game's format. Oversized intervals
 remain unsupported instead of causing an unbounded output allocation. Ordinary
 strict conversions and the GLB bytes of in-range clips are unchanged.
+
+
+## Optional owner wardrobe
+
+Schema 4 pony rows may include `wardrobe: {path, sha256, bytes, rigKey}`: one
+additional, content-addressed GLB in the existing `models/3d/` namespace. The
+viewer requests it only when opening that owner's wardrobe. Ordinary pony and
+complete-outfit GLBs keep their current bytes and independent animation refs.
+The optional asset uses the owner's exact rig, inverse binds and rest pose;
+equal `rigKey` values never authorize cross-owner clothing.
+
+Its `extras.atpWardrobe` is `{version: 1, defaults, sets, parts}`. `defaults`
+contains Body/Mane/Tail part IDs from the first registered set. `sets` maps each
+registered set ID to its nonempty **direct** slot IDs. `parts` maps each reachable
+part ID to `{slot, meshes, linked?}`, where `meshes` are original RK mesh indices
+and `linked` is the one native LinkedPart ID. Empty mesh arrays preserve exact
+missing-name/empty appearances. Only IDs directly listed in `sets` are selectable
+parts; linked-only parts are dependencies. An omitted set slot requests no change.
+Alternative-only sets are excluded from this ordinary context with private
+diagnostics; their existing standalone previews remain available.
+
+The GLB retains shared eyes/props and their existing `atpInteractions` profile.
+Hidden clothing uses the same `hiddenNodes` adoption mechanism; consumers must
+keep the three selected slots independently of animation reset/eye/prop state.
+The producer resolves the owner's existing wardrobe once per selection, reads one
+union of retained geometry, and compacts the unchanged normal preview from that
+result. RK/ANIM/texture caches and compiled animation assets are shared. Additional
+clothing conversion failures leave the ordinary preview available with a private
+diagnostic. Sync validates and uploads the wardrobe dependency before advertising
+the catalogue, using the existing immutable asset policy.
+
+## Native component weights and glTF transport
+
+Native RK skinning accumulates the four original weighted XYZ contributions and
+then projects with homogeneous W=1. A sum below or above one is valid native data;
+normalizing it changes deformation. `Model.weights` retains Luna's decoded values.
+The GLB stores the original four components in `_NATIVE_WEIGHTS` and the matching
+indices in `_NATIVE_JOINTS`. Standard `JOINTS_0` / `WEIGHTS_0` remain a separate,
+normalized glTF representation with duplicate positive influences merged.
+
+ATP restores the custom pair after GLTFLoader's automatic normalization and uses
+its existing CPU/GPU skinning, animations and wardrobe paths. No shader-source
+hash, character exception, version gate or additional skinning framework is used.
+Client downloads preserve both representations while compacting selected meshes.
+Ordinary Blender/glTF importers use the standard pair, so non-unit native
+weights can deform differently. Coiffed's ten affected vertices have no meaningful
+visual issue in the user's Blender review; no importer-specific correction is added.

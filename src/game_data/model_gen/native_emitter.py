@@ -7,7 +7,6 @@ at a guessed head bone. The viewer billboards that plane around the same origin.
 """
 from __future__ import annotations
 
-import hashlib
 import io
 import math
 import struct
@@ -93,7 +92,7 @@ def parse_dizzy_particle(raw: bytes) -> tuple[str, dict]:
     return material, result
 
 
-def _read_native_emitter(folder: str | Path, name: str) -> tuple[dict, bytes, dict[str, str]]:
+def _read_native_emitter(folder: str | Path, name: str) -> tuple[dict, bytes, list[str]]:
     """Return (JSON profile without texture index, PNG bytes, private sources)."""
     from PIL import Image
     from luna_kit.model.rk import parse_rkm
@@ -134,11 +133,11 @@ def _read_native_emitter(folder: str | Path, name: str) -> tuple[dict, bytes, di
     image.save(output, format='PNG')
     profile = {'version': 1, 'coordinateSpace': 'native-world-2d', 'anchor': 'model-origin',
                'particle': {**particle, 'blend': 'add'}}
-    provenance = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sources}
+    provenance = [p.name for p in sources]
     return profile, output.getvalue(), provenance
 
 
-def load_native_emitter(folder: str | Path, name: str) -> tuple[dict, bytes, dict[str, str]]:
+def load_native_emitter(folder: str | Path, name: str) -> tuple[dict, bytes, list[str]]:
     """Treat a failed optional effect closure as unsupported, never as no event."""
     try:
         return _read_native_emitter(folder, name)

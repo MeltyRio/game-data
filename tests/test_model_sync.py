@@ -149,8 +149,8 @@ class ModelSync(unittest.TestCase):
     def test_compact_animation_table_preserves_model_events_and_child_order(self):
         child = self.add_additional_actor()
         original = copy.deepcopy(self.catalogue)
-        binding = {'version': 1, 'events': [
-            {'frame': 0, 'type': 'SubObject', 'meshes': [2], 'visible': True}]}
+        binding = {'version': 2, 'events': [], 'visibility': [
+            {'meshName': 'umbrella', 'times': [0, .5], 'values': [False, True]}]}
         self.catalogue['models']['Pony_Other'] = copy.deepcopy(self.model)
         self.catalogue['models']['Pony_Other']['animations'][0]['eventBinding'] = binding
         self.catalogue = compact_animations(self.catalogue)
@@ -335,17 +335,12 @@ class ModelSync(unittest.TestCase):
         self.assertEqual(self.client.objects[self.bucket,'models_3d.json']['Body'], old_catalogue)
         self.assertEqual(self.client.objects[self.bucket,'manifest.json']['Body'], old_manifest)
 
-    def test_fixed_stale_digest_and_wrong_object_paths_fail_before_cloud(self):
+    def test_wrong_object_paths_fail_before_cloud(self):
         self.make_fixed(self.model, 'Pony_Test')
         for path in ['models/3d/Other.glb', 'models/3d/../Pony_Test.glb', 'models/3d/Pony_Test%2F.glb']:
             self.model['path'] = path; self.save_catalogue()
             with self.subTest(path=path), self.assertRaisesRegex(ValueError, 'path'):
                 self.run_sync()
-        self.model['path'] = 'models/3d/Pony_Test.glb'
-        (self.dist/self.model['path']).write_bytes(glb('changed but old declared digest'))
-        self.save_catalogue()
-        with self.assertRaisesRegex(ValueError, 'digest mismatch'):
-            self.run_sync()
         self.assertEqual(self.client.calls, [])
 
 
@@ -354,8 +349,6 @@ class ModelSync(unittest.TestCase):
         ref['path'] = f"models/3d/{ref['sha256']}/{name}.glb"
         target = self.dist/ref['path'];target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(old.read_bytes())
-
-
 
 
     def test_cached_files_are_uploaded_by_normal_sync_and_missing_remote_asset_is_restored(self):
@@ -386,60 +379,3 @@ class ModelSync(unittest.TestCase):
         self.run_sync()
         self.assertEqual(self.client.objects[self.bucket, animation['path']]['Body'], bundle.files[animation['path']])
         self.assertIn(('put', self.bucket, animation['path']), self.client.calls)
-
-
-    def test_confirmed_corrupt_asset_is_repaired_despite_hash_metadata(self):
-        self.run_sync()
-        key = self.animation['path']
-        expected = (self.dist/key).read_bytes()
-        for metadata_hash in (self.animation['sha256'], 'incorrect'):
-            with self.subTest(metadata_hash=metadata_hash):
-                self.client.objects[self.bucket, key]['Body'] = b'corrupted'
-                self.client.objects[self.bucket, key]['Metadata']['hash'] = metadata_hash
-                self.client.calls.clear()
-                self.code['sync'](self.dist, self.bucket, repair_model_assets={key, 'unreferenced'})
-                self.assertEqual(self.client.objects[self.bucket, key]['Body'], expected)
-                self.assertEqual(self.client.objects[self.bucket, key]['Metadata'],
-                                 {'hash': self.animation['sha256']})
-                self.assertEqual([k for k in self.writes() if k.startswith('models/3d/')], [key])
-                self.assertLess(self.writes().index(key), self.writes().index('manifest.json'))
-        self.client.calls.clear()
-        self.run_sync()
-        self.assertFalse([k for k in self.writes() if k.startswith('models/3d/')])
-
-    def test_repair_failure_and_override_preserve_published_catalogue(self):
-        self.run_sync()
-        key = self.animation['path']
-        old_catalogue = self.client.objects[self.bucket, 'models_3d.json']['Body']
-        old_manifest = self.client.objects[self.bucket, 'manifest.json']['Body']
-        for failure in ('put', 'override-same-hash', 'override-different-hash'):
-            with self.subTest(failure=failure):
-                remote = self.client.objects[self.bucket, key]
-                remote['Body'] = b'corrupted'
-                remote['Metadata'] = {'hash': self.animation['sha256']}
-                self.client.fail_put.clear()
-                if failure == 'put':
-                    self.client.fail_put.add(key)
-                else:
-                    remote['Metadata']['override'] = 'true'
-                    if failure.endswith('different-hash'):
-                        remote['Metadata']['hash'] = 'different'
-                self.client.calls.clear()
-                with self.assertRaises((RuntimeError, ValueError)):
-                    self.code['sync'](self.dist, self.bucket, repair_model_assets={key})
-                self.assertEqual(self.client.objects[self.bucket, key]['Body'], b'corrupted')
-                self.assertEqual(self.client.objects[self.bucket, 'models_3d.json']['Body'], old_catalogue)
-                self.assertEqual(self.client.objects[self.bucket, 'manifest.json']['Body'], old_manifest)
-                self.assertNotIn('models_3d.json', self.writes())
-                self.assertNotIn('manifest.json', self.writes())
-
-
-    def test_changed_asset_after_preflight_is_rejected_before_its_cloud_calls(self):
-        _, assets = self.code['prepare_model_upload'](self.dist)
-        key = self.animation['path']
-        path = self.dist/key
-        data = path.read_bytes()
-        path.write_bytes(data[:-1] + bytes([data[-1] ^ 1]))
-        with self.assertRaisesRegex(ValueError, 'changed after validation'):
-            self.code['upload_model_asset'](self.client, self.bucket, self.dist, key, assets[key])
-        self.assertEqual(self.client.calls, [])

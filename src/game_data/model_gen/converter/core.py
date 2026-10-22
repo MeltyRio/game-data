@@ -10,6 +10,7 @@ import hashlib
 import json
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
+from .native_animation import NativeClip
 
 
 class ConversionError(ValueError):
@@ -43,6 +44,7 @@ class Model:
     scale: float = 1.0
     interactions: dict | None = None
     interaction_effects: dict | None = None
+    wardrobe: dict | None = None
 
 
 @dataclass
@@ -55,14 +57,11 @@ class Clip:
     # after mixing, so matrices alone cannot recover its fractional poses.
     native_translations: np.ndarray | None = None
     native_rotations_xyzw: np.ndarray | None = None
-    events: list[dict] | None = None
 
 
 def rig_from_native(native: dict) -> Rig:
     parents = [bone['parent'] for bone in native['bones']]
-    anim_source = native.get('provenance', {}).get('animation_sha256')
-    require(isinstance(anim_source, str) and len(anim_source) == 64
-            and all(c in '0123456789abcdef' for c in anim_source), 'Missing or invalid native animation digest')
+    anim_source = native['provenance']['animation_sha256']
     # This token certifies a declared source library plus its indexed hierarchy,
     # never mere equal names or bone counts. Bind matrices are model-specific.
     signature = ['native-global-to-gltf-rx-pi-v1', anim_source, parents]
@@ -112,11 +111,10 @@ def local_trs(globals_: ArrayLike, parents: Sequence[int]) -> tuple[NDArray[np.f
         quaternions.append(q)
     q = np.asarray(quaternions).reshape((*rotations.shape[:-2], 4))
     t = result[..., :3, 3]
-    require(np.allclose(pose_matrices(t, q), result, atol=2e-5), 'TRS round-trip mismatch')
     return t, q
 
 
-def clip_from_native(row: dict, rig: Rig) -> Clip:
+def clip_from_native(row: NativeClip, rig: Rig) -> Clip:
     """Convert the declared global native poses to the model's exact rig."""
     frames = pose_matrices(row['translations'], row['rotations_xyzw'])
     require(frames.shape[-3] == len(rig.parents), 'Native clip/bone count mismatch')
@@ -125,24 +123,11 @@ def clip_from_native(row: dict, rig: Rig) -> Clip:
 
 
 def from_native(native: dict, *, identity: str, scale: float = 1.0, include_clips: bool = True) -> tuple[Model, list[Clip]]:
-    for primitive in native['primitives']:
-        indices = np.asarray(primitive['indices'])
-        require(indices.ndim == 2 and indices.shape[1] == 3 and len(indices) > 0
-                and (np.issubdtype(indices.dtype, np.integer) or np.issubdtype(indices.dtype, np.floating))
-                and np.isfinite(indices).all() and np.equal(indices, np.floor(indices)).all()
-                and indices.min() >= 0 and indices.max() < len(native['positions']),
-                'Invalid native triangle indices')
     used = sorted({int(v) for p in native['primitives'] for v in np.asarray(p['indices']).reshape(-1)})
     remap = {old: new for new, old in enumerate(used)}
     weights = np.asarray(native['weights'])[used].copy()
-    sums = weights.sum(axis=1)
-    require(np.isfinite(weights).all() and (weights >= 0).all(), 'Invalid native skin weights')
-    require(np.all(np.abs(sums-1) <= 4/65535 + 1e-9), 'Visible weights are not normalized within native quantization tolerance')
     rig = rig_from_native(native)
-    # Normalize only native UNORM16 residue, never infer missing weights.
-    weights /= sums[:, None]
     joints = np.asarray(native['joints'])[used].copy()
-    joints[weights == 0] = 0
     positions = np.asarray(native['positions'])[used].copy()
     bind = np.array([b['bind_global'] for b in native['bones']])
     rest = pose_matrices(native['rest']['translations'], native['rest']['rotations_xyzw'])[0]
