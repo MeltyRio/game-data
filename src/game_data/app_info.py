@@ -18,6 +18,7 @@ from luna_kit.api import Downloader, Version
 from luna_kit.file_utils import PathOrBinaryFile
 from luna_kit.find_ark_key import find_aes_key
 
+from .apk import read_apk_version
 from .console import console
 from .data_types.GPlayTypes import GPlayAPKDetails, GPlayFile
 from .s3 import get_s3_client, get_secret_s3_client
@@ -39,12 +40,25 @@ LUNA_KIT_ARK_KEYS_KEY = 'luna_kit/ark_keys.json'
 def unescape_text(s: str):
     return html.unescape(s.replace("<br>", "\n"))
 
+
+def get_release(version: str) -> str:
+    """Gets the release (x.y) of a version, every version of a release uses the same aes key"""
+
+    try:
+        parsed = Version.parse(version)
+        return f'{parsed.major}.{parsed.minor}'
+    except ValueError:
+        return version
+
+
 @dataclass
 class AppInfo:
     version: str
     release_notes: str
     raw_release_notes: str
     icon_url: str
+    # The version code is only known for the versions the google play api reports
+    version_code: int | None = None
 
 class StoreManager:
     api: GooglePlayAPI | None
@@ -202,6 +216,7 @@ class StoreManager:
             raw_release_notes = details['details']['appDetails']['recentChangesHtml'],
             release_notes = unescape_text(details['details']['appDetails']['recentChangesHtml']),
             icon_url = icon_url,
+            version_code = details['details']['appDetails']['versionCode'],
         )
 
     def get_gplay_scrape_details(self):
@@ -244,6 +259,8 @@ class StoreManager:
 
             infos = filter(lambda details: details is not None, [future.result() for future in futures])
 
+        # The sort is stable, so the google play api details are used when the versions
+        # are the same, they are the only ones that have the version code
         return sorted(
             infos,
             key = lambda details: Version.parse(details.version),
@@ -263,6 +280,39 @@ class StoreManager:
         
         details: GPlayAPKDetails = self.api.download(self.package_name, versionCode = version_code) # type: ignore
         return details
+    
+    def get_version_apk_details(self, version_code: int | None) -> tuple[GPlayAPKDetails, int | None]:
+        """
+        Gets the details of the apk of a specific version
+
+        Falls back to the latest apk if the version cannot be downloaded
+
+        Returns the details and the version code the apk was fetched for
+        """
+
+        if version_code is None:
+            return self.get_apk_details(), None
+
+        try:
+            return self.get_apk_details(version_code = version_code), version_code
+        except Exception as e:
+            e.add_note(f'Could not get the apk of version code {version_code}')
+            console.print_exception()
+            console.print('[yellow]Falling back to the latest apk[/]')
+            return self.get_apk_details(), None
+    
+    def get_store_version(self) -> tuple[str, int] | None:
+        """Gets the version and the version code the store reports for the app"""
+
+        if self.api is None:
+            return None
+
+        try:
+            app_details = self.api.details(self.package_name)['details']['appDetails']
+            return app_details['versionString'], app_details['versionCode']
+        except Exception:
+            console.print('[yellow]Could not get the version of the app from the store[/]')
+            return None
     
     def find_lib_apk(self, apk_details: GPlayAPKDetails):
         ARCHITECTURES = [
@@ -288,73 +338,130 @@ class StoreManager:
         
         return lib_file
 
+    def check_apk_version(self, apk_path: Path, version: Version, version_code: int | None = None) -> bool:
+        """
+        Checks that the downloaded apk is the version that is being built
+
+        Returns False if the apk is not the version that is wanted
+        """
+
+        apk_version = read_apk_version(apk_path)
+
+        if apk_version is None:
+            console.print('[yellow]Could not read the version of the apk[/]')
+            return True
+
+        console.print(f'The apk is version [yellow]{apk_version}[/]')
+
+        expected_name = str(version)
+        expected_code = version_code
+
+        if expected_code is None:
+            # The version code is not known, get the version of the store
+            store_version = self.get_store_version()
+
+            if store_version is None:
+                return True
+
+            expected_name, expected_code = store_version
+
+        if apk_version.version_code is not None and expected_code is not None and apk_version.version_code != expected_code:
+            console.print(
+                f'[red]The apk has version code {apk_version.version_code}, '
+                f'but the version that is wanted has version code {expected_code} ({expected_name})[/]'
+            )
+            return False
+
+        if apk_version.version_name is not None and apk_version.version_name != expected_name:
+            console.print(
+                f'[red]The apk is version {apk_version.version_name}, '
+                f'but the version that is wanted is {expected_name}[/]'
+            )
+            return False
+
+        if expected_name != str(version):
+            # The version of the store is not the version that is being built
+            if get_release(expected_name) == get_release(str(version)):
+                console.print(f'[yellow]The store has version {expected_name} instead of {version}[/]')
+            else:
+                console.print(f'[red]The store has version {expected_name} instead of {version}[/]')
+                return False
+
+        return True
+
     def get_aes_key(self, apk_file: PathOrBinaryFile, version: Version):
         try:
             key = find_aes_key(apk_file)
         except Exception as e:
             console.print_exception()
-            return
-        
-        if self.public_s3 is not None and self.public_bucket:
-            ark_keys: dict[str, str] = {}
-            try:
-                ark_keys = json.load(self.public_s3.get_object(
-                    Bucket = self.public_bucket,
-                    Key = LUNA_KIT_ARK_KEYS_KEY,
-                )['Body'])
-            except Exception as e:
-                e.add_note('Failed to get aes keys')
-                console.print_exception()
-            
-            key_hex = key.hex()
-            if key_hex not in list(ark_keys.values()):
-                ark_keys[str(version)] = key_hex
-
-                try:
-                    self.public_s3.put_object(
-                        Bucket = self.public_bucket,
-                        Key = LUNA_KIT_ARK_KEYS_KEY,
-                        Body = json.dumps(ark_keys, indent = 2, ensure_ascii = False).encode('utf-8'),
-                        ContentType = 'application/json',
-                    )
-                except Exception as e:
-                    e.add_note('Failed to upload keys')
-                    console.print_exception()
-
-        return key
-    
-    def get_stored_aes_key(self, version: Version) -> bytes | None:
-        """
-        Gets the aes key of a version from the stored keys, if it has been stored before
-
-        Args:
-            version (Version): Version to get the key for
-        """
-
-        if self.public_s3 is None or not self.public_bucket:
+            console.print('[red]Could not find the aes key in the apk[/]')
             return None
-
+        
+        console.print(f'Found the aes key [yellow]{key.hex()}[/] for version [yellow]{version}[/]')
+        
+        if self.public_s3 is None or not self.public_bucket:
+            console.print('[yellow]Could not upload the aes key, no bucket[/]')
+            return key
+        
+        ark_keys: dict[str, str] = {}
         try:
-            ark_keys: dict[str, str] = json.load(self.public_s3.get_object(
+            ark_keys = json.load(self.public_s3.get_object(
                 Bucket = self.public_bucket,
                 Key = LUNA_KIT_ARK_KEYS_KEY,
             )['Body'])
-        except Exception:
+        except Exception as e:
+            e.add_note('Failed to get aes keys')
+            console.print_exception()
+        
+        key_hex = key.hex()
+        
+        # Every version of a release uses the same key, so the key of the apk is only the
+        # right one if it is not the key of another release
+        known_versions = [
+            known_version
+            for known_version, known_key in ark_keys.items()
+            if known_key == key_hex
+        ]
+        
+        release = get_release(str(version))
+        other_releases = [
+            known_version
+            for known_version in known_versions
+            if get_release(known_version) != release
+        ]
+        
+        if other_releases:
+            # The key belongs to another release, so the apk is not the version we want
+            console.print(f'[red]The aes key is the key of {", ".join(other_releases)}, the apk is not version {version}[/]')
             return None
-
-        key_hex = ark_keys.get(str(version))
-
-        if not key_hex:
-            return None
-
-        return bytes.fromhex(key_hex)
-
-    def fetch_aes_key(self, version: Version) -> bytes | None:
+        
+        if known_versions:
+            console.print(f'The aes key is already known for {", ".join(known_versions)}')
+        else:
+            ark_keys[str(version)] = key_hex
+            
+            try:
+                self.public_s3.put_object(
+                    Bucket = self.public_bucket,
+                    Key = LUNA_KIT_ARK_KEYS_KEY,
+                    Body = json.dumps(ark_keys, indent = 2, ensure_ascii = False).encode('utf-8'),
+                    ContentType = 'application/json',
+                )
+                console.print('Uploaded the aes key')
+            except Exception as e:
+                e.add_note('Failed to upload keys')
+                console.print_exception()
+                console.print('[red]Failed to upload the aes key[/]')
+        
+        return key
+    
+    def fetch_aes_key(self, version: Version, version_code: int | None = None) -> bytes | None:
         """
         Downloads lib apk, extracts aes key, and uploads key to rucket
 
         Args:
             version (Version): Version this is for
+            version_code (int | None): Version code of the version, the apk of that version is downloaded
         """
 
         with tempfile.TemporaryDirectory() as tempdir:
@@ -362,7 +469,7 @@ class StoreManager:
             apk_path = dirpath/'app.apk'
 
             console.print('Fetching apk details')
-            details = self.get_apk_details()
+            details, apk_version_code = self.get_version_apk_details(version_code)
             lib_info = self.find_lib_apk(details)
             if lib_info is None:
                 console.print('[red]Could not find lib apk, trying main apk[/]')
@@ -371,4 +478,13 @@ class StoreManager:
             console.print('Downloading apk')
             self.download_apk(lib_info, apk_path)
             
-            return self.get_aes_key(apk_path, version)
+            if not self.check_apk_version(apk_path, version, apk_version_code):
+                console.print('[red]The apk is not the version that is wanted[/]')
+                return None
+            
+            key = self.get_aes_key(apk_path, version)
+            
+            if key is None:
+                console.print('[red]Could not get the aes key from the apk[/]')
+            
+            return key
