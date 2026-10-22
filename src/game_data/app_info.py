@@ -323,6 +323,32 @@ class StoreManager:
 
         return key
     
+    def get_stored_aes_key(self, version: Version) -> bytes | None:
+        """
+        Gets the aes key of a version from the stored keys, if it has been stored before
+
+        Args:
+            version (Version): Version to get the key for
+        """
+
+        if self.public_s3 is None or not self.public_bucket:
+            return None
+
+        try:
+            ark_keys: dict[str, str] = json.load(self.public_s3.get_object(
+                Bucket = self.public_bucket,
+                Key = LUNA_KIT_ARK_KEYS_KEY,
+            )['Body'])
+        except Exception:
+            return None
+
+        key_hex = ark_keys.get(str(version))
+
+        if not key_hex:
+            return None
+
+        return bytes.fromhex(key_hex)
+
     def fetch_aes_key(self, version: Version) -> bytes | None:
         """
         Downloads lib apk, extracts aes key, and uploads key to rucket

@@ -35,6 +35,45 @@ from .sync import sync, upload_file
 from .transformer import Transformer
 
 
+GAME_VERSION_KEY = 'game_version.json'
+GAME_VERSION_CHECKER_KEY = 'game_version_checker/game_version.json'
+GAME_VERSION_CHECKER_DLC_MANIFEST_KEY = 'game_version_checker/current_dlc_manifest.json'
+
+
+def get_s3_version(s3_client, bucket: str, key: str) -> GameVersion | None:
+    """Gets a version file from the bucket. Returns None if it does not exist"""
+    try:
+        version_file = s3_client.get_object(
+            Bucket = bucket,
+            Key = key,
+        )
+        return GameVersion.model_validate_json(version_file['Body'].read())
+    except Exception:
+        return None
+
+
+def compare_versions(version: str, other: str) -> int:
+    """
+    Compares two versions
+
+    Returns 1 if the version is newer, -1 if it is older and 0 if they are the same
+    """
+
+    try:
+        parsed = Version.parse(version)
+        parsed_other = Version.parse(other)
+    except ValueError:
+        # Fall back to comparing the versions as strings if they cannot be parsed
+        if version == other:
+            return 0
+        return 1 if version > other else -1
+
+    if parsed == parsed_other:
+        return 0
+
+    return 1 if parsed > parsed_other else -1
+
+
 def build_cdn(
     raw_dir: str | Path,
     dist_dir: str | Path,
@@ -73,27 +112,31 @@ def build_cdn(
     aes_key: bytes | None = None
 
     if BUCKET and s3_client:
-        last_version: GameVersion | None = None
-        try:
-            version_file = s3_client.get_object(
-                Bucket = BUCKET,
-                Key = 'game_version_checker/game_version.json',
-            )
-            last_version = GameVersion.model_validate_json(version_file['Body'].read())
-        except:
+        checker_version = get_s3_version(s3_client, BUCKET, GAME_VERSION_CHECKER_KEY)
+        published_version = get_s3_version(s3_client, BUCKET, GAME_VERSION_KEY)
+
+        last_version = checker_version or published_version
+
+        if last_version is None:
             try:
-                version_file = s3_client.get_object(
-                    Bucket = BUCKET,
-                    Key = 'game_version.json',
-                )
-                last_version = GameVersion.model_validate_json(version_file['Body'].read())
+                with open(dist_dir/'game_version.json', 'r', encoding = 'utf-8') as file:
+                    last_version = GameVersion.model_validate_json(file.read())
             except:
-                try:
-                    with open(dist_dir/'game_version.json', 'r') as file:
-                        last_version = json.load(file)['game_version']
-                except:
-                    console.print('Could not get current version')
-        
+                console.print('Could not get current version')
+
+        # If the detected version is not the published version, the build of that version
+        # never finished. The build has to be redone, but the version was already announced,
+        # so the notifications are skipped.
+        pending_version = (
+            checker_version.game_version
+            if (
+                checker_version is not None
+                and published_version is not None
+                and checker_version.game_version != published_version.game_version
+            )
+            else None
+        )
+
         if  version == 'latest' or force:
             console.print('getting app info')
 
@@ -114,7 +157,10 @@ def build_cdn(
             notifier.app_icon = app_info.icon_url
 
             version = latest_version
-            if not last_version or Version.parse(latest_version) > Version.parse(last_version.game_version):
+
+            version_diff = compare_versions(latest_version, last_version.game_version) if last_version else 1
+
+            if version_diff > 0:
                 console.print(f'New app version found: [yellow]{latest_version}[/]')
                 notifier.notify('app')
 
@@ -128,7 +174,7 @@ def build_cdn(
                 try:
                     s3_client.put_object(
                         Bucket = BUCKET,
-                        Key = 'game_version_checker/game_version.json',
+                        Key = GAME_VERSION_CHECKER_KEY,
                         Body = last_version.model_dump_json().encode('utf-8'),
                         ContentType = 'application/json',
                     )
@@ -140,16 +186,25 @@ def build_cdn(
                 except:
                     console.print('[red]Could not get aes key[/]')
                 
-            elif Version.parse(latest_version) < Version.parse(last_version.game_version):
+            elif pending_version is not None:
+                # The detected version was never published, so the build of it did not finish.
+                # Build it again, but skip the notifications, the version was already announced.
+                version = pending_version
+                console.print(f'Pending build found for version [yellow]{version}[/]')
+
+                try:
+                    aes_key = store_manager.get_stored_aes_key(Version.parse(version))
+                except:
+                    console.print('[red]Could not get aes key[/]')
+            elif version_diff < 0:
+                # The store has an older version than the one we have, do not downgrade
                 console.print('[green]All up to date![/]')
                 return True
             else:
-                api = API('android', last_version.game_version)
-
                 try:
                     last_dlc_manifest_file = s3_client.get_object(
                         Bucket = BUCKET,
-                        Key = 'game_version_checker/current_dlc_manifest.json',
+                        Key = GAME_VERSION_CHECKER_DLC_MANIFEST_KEY,
                     )
                     last_dlc_manifest = json.load(last_dlc_manifest_file['Body'])
 
@@ -169,7 +224,7 @@ def build_cdn(
                 
             console.print(f'[green]Found version {version}[/]')
         else:
-            if last_version and Version.parse(version) < Version.parse(last_version.game_version):
+            if last_version and compare_versions(version, last_version.game_version) < 0:
                 console.print(f'[red]Selected version {version} is lower than last version {last_version.game_version}[/]')
                 if console.input(f'Continue (y/N)? ').strip() in ['', 'n', 'no', 'f', 'false']:
                     console.print('Quitting')
@@ -277,8 +332,8 @@ def build_cdn(
 
             s3_client.copy_object(
                 Bucket = BUCKET,
-                Key = 'game_version_checker/game_version.json',
-                CopySource = {'Bucket': BUCKET, 'Key': 'game_version.json'},
+                Key = GAME_VERSION_CHECKER_KEY,
+                CopySource = {'Bucket': BUCKET, 'Key': GAME_VERSION_KEY},
                 MetadataDirective = 'COPY',
             )
 
@@ -287,7 +342,7 @@ def build_cdn(
 
         s3_client.put_object(
             Bucket = BUCKET,
-            Key = 'game_version_checker/current_dlc_manifest.json',
+            Key = GAME_VERSION_CHECKER_DLC_MANIFEST_KEY,
             Body = json.dumps(latest_dlc_manifest).encode('utf-8'),
             ContentType = 'application/json',
         )
