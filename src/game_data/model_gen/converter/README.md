@@ -383,10 +383,9 @@ The GLB stores the original four components in `_NATIVE_WEIGHTS` and the matchin
 indices in `_NATIVE_JOINTS`. Standard `JOINTS_0` / `WEIGHTS_0` remain a separate,
 normalized glTF representation with duplicate positive influences merged.
 
-ATP restores the custom pair after GLTFLoader's automatic normalization and uses
-its existing CPU/GPU skinning, animations and wardrobe paths. No shader-source
-hash, character exception, version gate or additional skinning framework is used.
-Client downloads preserve both representations while compacting selected meshes.
-Ordinary Blender/glTF importers use the standard pair, so non-unit native
-weights can deform differently. Coiffed's ten affected vertices have no meaningful
-visual issue in the user's Blender review; no importer-specific correction is added.
+ATP uses the standard normalized pair for CPU/GPU skinning, wardrobes and
+additional actors. The custom attributes remain source data and do not override
+rendering. Client downloads preserve both representations while compacting
+selected meshes; ordinary Blender/glTF importers also use the standard pair.
+This consistently avoids native underweight deformation, including Coiffed's
+scarf and hind-leg artifacts, without changing geometry or bind matrices.

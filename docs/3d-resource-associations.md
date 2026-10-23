@@ -572,10 +572,12 @@ files with current tables. The important input categories are:
 | Native `.rkm`, `.pvr`, `.alpha.pvr` and `.png` dependencies | Materials and textures. Retain RKM files that exist in the release; only a genuinely absent native RKM may use the verified default. |
 | Referenced controller `.xml` | Appearance and animation event checks. |
 
-For example, the verified 11.4.3c Twilight declaration resolves to
-`pony_twilight_set_lod1.rk` and the `pony_type01.anim` / `pony_type01.csv` library,
-with `pony_type01.xml` for controller checks. Its materials and textures are
-additional dependencies. These names illustrate the native association; they
+For example, the verified 11.4.3c Twilight declaration names
+`pony_twilight_set_lod1.rk`. Her display mapping uses
+`pony_type01_twilightprincess_lod1.rk`, selected by the native transformation
+scene, while retaining the `pony_type01.anim` / `pony_type01.csv` library and
+`pony_type01.xml` controller context. Keep the winged model and its material and
+texture dependencies in the extraction. These names illustrate the association; they
 are not a minimal input pack for the whole build. APKs, client `.so` binaries,
 private research reports, saved games and player accounts are not runtime
 inputs to this extracted-input build.
@@ -662,8 +664,9 @@ keep them private and do not sync a partial review directory to production.
 
 Native weights need not sum to one. Conversion retains Luna's original components
 and bone indices in `_NATIVE_WEIGHTS` / `_NATIVE_JOINTS`; a separate normalized
-standard pair satisfies glTF transport requirements. ATP restores the custom pair
-after GLTFLoader normalization. Mesh selection, wardrobe, animation binding and
-visibility v2 retain their existing contracts. Client GLB downloads keep both
-pairs. Ordinary glTF importers, including Blender, do not automatically reproduce
-non-unit native deformation from the standard pair; see the converter README.
+standard pair satisfies glTF transport requirements. ATP uses that normalized
+`JOINTS_0` / `WEIGHTS_0` pair for both CPU and GPU rendering, including wardrobes
+and additional actors. Client GLB downloads retain both pairs but use the standard
+pair, as ordinary glTF importers do. The custom attributes preserve source data
+without restoring native underweight deformation. Animation binding and visibility
+v2 retain their existing contracts.
