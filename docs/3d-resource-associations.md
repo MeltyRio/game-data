@@ -8,6 +8,11 @@ GameObjectData and reads the same campaign. `--skip model_gen` skips this stage.
 There is no additional downloader, archive inventory, upload service or manual
 list of models to update when game resources change.
 
+Twilight Sparkle uses the winged RK selected by the native
+`TwilightPrincess_3_Transformation` scene. Her original identity, controller and
+animation library remain unchanged; her wardrobe and owner-derived costume
+previews use the same winged model. This is a generation-time display choice.
+
 The existing extractor remains responsible for obtaining the current inputs.
 Generation does not claim that an arbitrary extracted subset is a complete
 release. A locally missing file does not establish that the native resource is

@@ -16,6 +16,11 @@ if TYPE_CHECKING:
     from luna_kit.gameobjectdata import GameObject, GameObjectData
 
 
+# Native TwilightPrincess_3_Transformation uses this model after gaining wings.
+# Keep the original declaration for its controller and animation-library context.
+DISPLAY_MODELS = {'Pony_Twilight_Sparkle': 'pony_type01_twilightprincess_lod1'}
+
+
 class AssociationError(ValueError):
     pass
 
@@ -205,7 +210,7 @@ def discover_associations(game_objects: GameObjectData, extracted_dir: str | Pat
                     row['events'] = None
                 model, anim = _stem(model), _stem(anim)
                 row['declaration'] = {'model': model, 'animation': anim}
-                info = inspect(model + '.rk', model_cache)
+                info = inspect(DISPLAY_MODELS.get(identity, model) + '.rk', model_cache)
                 library = inspect(anim + '.anim', anim_cache, _animation)
                 row['model'], row['animation'] = info['file'], library['file']
                 # The native loader appends .anim and .csv to the same caller
