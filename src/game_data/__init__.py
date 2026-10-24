@@ -152,6 +152,9 @@ def build_cdn(
             else:
                 latest_version = version
 
+            # The version code is only known for the version the store reports
+            version_code = app_info.version_code if app_info.version == latest_version else None
+
             notifier.version = latest_version
             notifier.release_notes = app_info.release_notes
             notifier.app_icon = app_info.icon_url
@@ -182,9 +185,12 @@ def build_cdn(
                     console.print('[red]Failed to save version[/]')
 
                 try:
-                    aes_key = store_manager.fetch_aes_key(Version.parse(latest_version))
+                    aes_key = store_manager.fetch_aes_key(Version.parse(latest_version), version_code)
                 except:
                     console.print('[red]Could not get aes key[/]')
+
+                if aes_key is None:
+                    console.print('[yellow]No aes key, the ark files might not be extractable[/]')
                 
             elif pending_version is not None:
                 # The detected version was never published, so the build of it did not finish.
@@ -192,10 +198,17 @@ def build_cdn(
                 version = pending_version
                 console.print(f'Pending build found for version [yellow]{version}[/]')
 
-                try:
-                    aes_key = store_manager.get_stored_aes_key(Version.parse(version))
-                except:
-                    console.print('[red]Could not get aes key[/]')
+                if compare_versions(latest_version, version) == 0:
+                    # The key of the version might not be known yet, get it from the apk again
+                    try:
+                        aes_key = store_manager.fetch_aes_key(Version.parse(version), version_code)
+                    except:
+                        console.print('[red]Could not get aes key[/]')
+                else:
+                    console.print(f'[yellow]The store has version {latest_version} instead of {version}, the known keys will be used[/]')
+
+                if aes_key is None:
+                    console.print('[yellow]No aes key, the ark files might not be extractable[/]')
             elif version_diff < 0:
                 # The store has an older version than the one we have, do not downgrade
                 console.print('[green]All up to date![/]')
