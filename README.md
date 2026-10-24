@@ -95,5 +95,5 @@ These caches are disposable and do not establish native resource associations.
 The catalogue uses schema 4: a shared animation-reference table, per-model
 selections and native visibility event bindings.
 Update the [ATP viewer](https://github.com/all-the-ponies/all-the-ponies/pull/35)
-before publishing schema 4 resources. Existing fixed Object ID model URLs and
-non-atomic publication behavior are unchanged.
+before publishing schema 4 resources. Models use fixed Object ID URLs;
+publication across models and the catalogue is not atomic.

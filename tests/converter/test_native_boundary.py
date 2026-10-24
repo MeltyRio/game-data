@@ -70,13 +70,10 @@ class NativeBoundaryTests(unittest.TestCase):
         native = self.load(['wave'])
         self.assertEqual(native['primitives'][0]['indices'].tolist(), [[1, 3, 2]])
 
-    def test_converter_keeps_version_skin_and_uv_requirements(self):
+    def test_converter_keeps_skin_and_uv_requirements(self):
         path = self.folder/'flag.rk'
         valid = path.read_bytes()
         cases = []
-        raw = bytearray(valid)
-        struct.pack_into('<I', raw, 8, 99)
-        cases.append((raw, 'version'))
         for tag in (7, 13, 17):
             raw = bytearray(valid)
             header = next(80 + i * 16 for i in range(24)

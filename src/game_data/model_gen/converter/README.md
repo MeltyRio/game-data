@@ -1,8 +1,7 @@
 # Model conversion core
 
-This module migrates the conversion core from ATP PR #35 into game-data. It
-turns one already resolved RK model, ANIM library and CSV clip declaration into
-an in-memory skinned model GLB and independent animation GLBs. The surrounding
+This module converts a resolved RK model, ANIM library and CSV clip declaration
+into an in-memory skinned model GLB and independent animation GLBs. The surrounding
 game-data stage owns native resource association, default appearance selection,
 staging and publication. This module has no package installer, CLI or uploader.
 
@@ -65,8 +64,10 @@ GLBs contain only standard STEP channels and native interpolation samples.
 Both cached and uncached conversion emit `eventBinding: {version: 2, events: [...],
 visibility: [...]}` on catalogue animation references. The generator converts
 SubObject and EyeSet writes to `{meshName, times, values}` visibility curves:
-original mesh names, seconds (`frame / fps`), and booleans. Defaults and same-time
-writes follow native source order; later repeated values remain explicit.
+original mesh names, seconds (`frame / fps`), and booleans. A name can identify
+multiple submeshes; consumers apply its curve to every matching mesh node.
+Defaults and same-time writes follow native source order; later repeated values
+remain explicit.
 Only EyeSet expression/blink settings and Emitter records remain in `events`.
 ATP consumes the same curves for preview and client-side GLB export, without a
 frontend conversion or legacy embedded-event fallback.
