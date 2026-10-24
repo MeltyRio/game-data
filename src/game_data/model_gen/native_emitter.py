@@ -11,9 +11,13 @@ import io
 import math
 import struct
 from pathlib import Path
+from typing import TYPE_CHECKING
 from xml.etree import ElementTree as ET
 
 from .converter.native import NativeInputError, _sibling
+
+if TYPE_CHECKING:
+    from .converter.texture_cache import TextureCache
 
 DIZZY_EMITTER = 'mlp_arena_pony_defeat_02'
 
@@ -92,7 +96,8 @@ def parse_dizzy_particle(raw: bytes) -> tuple[str, dict]:
     return material, result
 
 
-def _read_native_emitter(folder: str | Path, name: str) -> tuple[dict, bytes, list[str]]:
+def _read_native_emitter(folder: str | Path, name: str, *,
+                         texture_cache: TextureCache | None = None) -> tuple[dict, bytes, list[str]]:
     """Return (JSON profile without texture index, PNG bytes, private sources)."""
     from PIL import Image
     from luna_kit.model.rk import parse_rkm
@@ -113,34 +118,53 @@ def _read_native_emitter(folder: str | Path, name: str) -> tuple[dict, bytes, li
            'Unreviewed native emitter material controller')
     path = _sibling(folder, material.DiffuseTexture + ('.png' if material.NoCompress else '.pvr'))
     sources = [source, material_path, path]
-    if material.NoCompress:
-        with Image.open(path) as image:
-            _check(image.format == 'PNG', 'Emitter texture must be PNG')
-            image = image.convert('RGBA')
-    else:
-        image = PVR(str(path), external_alpha=False).image
-        _check(image is not None, 'Missing native emitter decoded image')
-        alpha_path = path.with_name(path.stem + '.alpha.pvr')
-        if alpha_path.exists() or alpha_path.is_symlink():
-            alpha_path = _sibling(folder, alpha_path.name)
-            sources.append(alpha_path)
-            if not image_has_alpha(image):
+    alpha_path, alpha_error = None, None
+    if not material.NoCompress:
+        candidate = path.with_name(path.stem + '.alpha.pvr')
+        try:
+            if candidate.exists() or candidate.is_symlink():
+                alpha_path = _sibling(folder, candidate.name)
+                sources.append(alpha_path)
+        except (OSError, ValueError) as error:
+            # Keep primary decode errors ahead of invalid sidecar errors.
+            alpha_error = error
+
+    def decode_texture() -> tuple[bytes, int, int]:
+        if material.NoCompress:
+            with Image.open(path) as image:
+                _check(image.format == 'PNG', 'Emitter texture must be PNG')
+                image = image.convert('RGBA')
+        else:
+            image = PVR(str(path), external_alpha=False).image
+            _check(image is not None, 'Missing native emitter decoded image')
+            if alpha_error is not None:
+                raise alpha_error
+            if alpha_path is not None and not image_has_alpha(image):
                 alpha = PVR(str(alpha_path), external_alpha=False).image
                 _check(alpha is not None and alpha.size == image.size, 'Invalid emitter alpha image')
                 image = put_alpha(image, alpha)
-        image = image.convert('RGBA')
-    output = io.BytesIO()
-    image.save(output, format='PNG')
+            image = image.convert('RGBA')
+        output = io.BytesIO()
+        image.save(output, format='PNG')
+        return output.getvalue(), image.width, image.height
+
+    if texture_cache is None or alpha_error is not None:
+        png, _, _ = decode_texture()
+    else:
+        png, _, _ = texture_cache.get_or_decode(sources[2:],
+            settings=f'emitter-png-v1/no-compress={material.NoCompress}/strict-png/external-alpha=false/embedded-preferred/strict-alpha-size/RGBA/pillow-default',
+            decode=decode_texture)
     profile = {'version': 1, 'coordinateSpace': 'native-world-2d', 'anchor': 'model-origin',
                'particle': {**particle, 'blend': 'add'}}
     provenance = [p.name for p in sources]
-    return profile, output.getvalue(), provenance
+    return profile, png, provenance
 
 
-def load_native_emitter(folder: str | Path, name: str) -> tuple[dict, bytes, list[str]]:
+def load_native_emitter(folder: str | Path, name: str, *,
+                        texture_cache: TextureCache | None = None) -> tuple[dict, bytes, list[str]]:
     """Treat a failed optional effect closure as unsupported, never as no event."""
     try:
-        return _read_native_emitter(folder, name)
+        return _read_native_emitter(folder, name, texture_cache=texture_cache)
     except NativeInputError:
         raise
     except (OSError, ValueError, TypeError, AssertionError, struct.error, NotImplementedError) as error:

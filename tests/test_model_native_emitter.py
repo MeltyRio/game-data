@@ -1,14 +1,17 @@
 """Synthetic emitter resources; no native game artwork is distributed."""
 import io
+import struct
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 from xml.etree import ElementTree as ET
 
 from bootstrap import ROOT
 from PIL import Image
 from game_data.model_gen.native_emitter import DIZZY_EMITTER, load_native_emitter, parse_dizzy_particle
 from game_data.model_gen.converter.native import NativeInputError
+from game_data.model_gen.converter.texture_cache import TextureCache
 
 
 def particle():
@@ -75,3 +78,113 @@ class NativeEmitterTests(unittest.TestCase):
             with self.assertRaises(NativeInputError): load_native_emitter(folder, DIZZY_EMITTER)
             material.unlink()
             with self.assertRaises(NativeInputError): load_native_emitter(folder, DIZZY_EMITTER)
+
+
+class EmitterTextureCacheTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.folder = self.root/'native'; self.folder.mkdir()
+        self.material = self.folder/'synthetic.rkm'
+        self.cache = TextureCache(self.root/'cache')
+        self.fixture()
+
+    def fixture(self, compressed=False):
+        (self.folder/(DIZZY_EMITTER+'.particle')).write_bytes(ET.tostring(particle()))
+        self.material.write_text('DiffuseTexture=synthetic\nNoCompress='+str(int(not compressed))+
+            '\nBlendMode=add\nDepthTest=0\nDepthWrite=0\nShader=rkshader_particle\n')
+        Image.new('RGBA', (2, 2), (40, 80, 120, 128)).save(self.folder/'synthetic.png')
+        if compressed:
+            self.pvr(self.folder/'synthetic.pvr', (255, 0, 0, 255))
+
+    def pvr(self, path, pixel, size=(2, 2)):
+        width, height = size
+        header = struct.pack('<4sI4s4s9I', b'PVR\x03', 0, b'rgba', bytes([8]*4),
+                             0, 0, height, width, 1, 1, 1, 1, 0)
+        path.write_bytes(header + bytes(pixel)*(width*height))
+
+    def test_png_bytes_are_shared_but_profiles_and_source_names_are_independent(self):
+        original = load_native_emitter(self.folder, DIZZY_EMITTER)
+        first = load_native_emitter(self.folder, DIZZY_EMITTER, texture_cache=self.cache)
+        self.assertEqual(first, original)
+        other = self.root/'other'; other.mkdir()
+        doc = particle(); doc.find('Timing').set('ParticleCount', '7')
+        (other/(DIZZY_EMITTER+'.particle')).write_bytes(ET.tostring(doc))
+        (other/'synthetic.rkm').write_text(self.material.read_text().replace('DiffuseTexture=synthetic', 'DiffuseTexture=renamed'))
+        (other/'renamed.png').write_bytes((self.folder/'synthetic.png').read_bytes())
+        warm_cache = TextureCache(self.cache.directory)
+        with patch.object(Image.Image, 'convert', side_effect=AssertionError('Decoded a cached image')):
+            second = load_native_emitter(other, DIZZY_EMITTER, texture_cache=warm_cache)
+        self.assertEqual((self.cache.misses, warm_cache.hits), (1, 1))
+        self.assertEqual(first[1], second[1])
+        self.assertEqual((first[0]['particle']['count'], second[0]['particle']['count']), (3, 7))
+        self.assertEqual(second[2], [DIZZY_EMITTER+'.particle', 'synthetic.rkm', 'renamed.png'])
+        first[0]['particle']['min'][0][0] = 99
+        self.assertEqual(second[0]['particle']['min'][0][0], -1)
+        self.assertEqual(load_native_emitter(self.folder, DIZZY_EMITTER, texture_cache=warm_cache), original)
+
+    def test_pvr_alpha_content_and_presence_invalidate_without_losing_embedded_alpha(self):
+        self.fixture(compressed=True)
+        primary = self.folder/'synthetic.pvr'; alpha = self.folder/'synthetic.alpha.pvr'
+        for alpha_value, embedded, expected in [(64, 255, 64), (96, 255, 96), (32, 80, 80), (None, 255, 255)]:
+            with self.subTest(alpha=alpha_value, embedded=embedded):
+                self.pvr(primary, (255, 0, 0, embedded))
+                if alpha_value is None: alpha.unlink()
+                else: self.pvr(alpha, (alpha_value, alpha_value, alpha_value, 255))
+                uncached = load_native_emitter(self.folder, DIZZY_EMITTER)
+                actual = load_native_emitter(self.folder, DIZZY_EMITTER, texture_cache=self.cache)
+                self.assertEqual(actual, uncached)
+                with Image.open(io.BytesIO(actual[1])) as image:
+                    self.assertEqual(image.size, (2, 2))
+                    self.assertEqual(image.getpixel((0, 0)), (255, 0, 0, expected))
+                with patch('luna_kit.pvr.PVR', side_effect=AssertionError('Decoded cached PVR')):
+                    self.assertEqual(load_native_emitter(self.folder, DIZZY_EMITTER, texture_cache=self.cache), actual)
+        self.assertEqual((self.cache.misses, self.cache.hits), (4, 4))
+
+    def test_warm_cache_keeps_strict_png_and_material_validation(self):
+        for invalid in ('jpeg', 'corrupt', 'missing', 'material', 'particle'):
+            with self.subTest(invalid=invalid):
+                self.fixture()
+                load_native_emitter(self.folder, DIZZY_EMITTER, texture_cache=self.cache)
+                path = self.folder/'synthetic.png'
+                if invalid == 'jpeg': Image.new('RGB', (2, 2)).save(path, format='JPEG')
+                elif invalid == 'corrupt': path.write_bytes(b'bad PNG')
+                elif invalid == 'missing': path.unlink()
+                elif invalid == 'material': self.material.write_text(self.material.read_text()+'DepthWrite=1\n')
+                else: (self.folder/(DIZZY_EMITTER+'.particle')).write_bytes(b'<bad')
+                with self.assertRaises(NativeInputError) as original:
+                    load_native_emitter(self.folder, DIZZY_EMITTER)
+                with self.assertRaises(NativeInputError) as cached:
+                    load_native_emitter(self.folder, DIZZY_EMITTER, texture_cache=self.cache)
+                self.assertEqual(str(cached.exception), str(original.exception))
+
+    def test_invalid_sidecars_preserve_primary_decode_error_precedence(self):
+        self.fixture(compressed=True)
+        primary = self.folder/'synthetic.pvr'; alpha = self.folder/'synthetic.alpha.pvr'
+        for invalid in ('size', 'broken', 'escape', 'directory'):
+            with self.subTest(invalid=invalid):
+                self.pvr(primary, (255, 0, 0, 255))
+                if invalid == 'size': self.pvr(alpha, (64, 64, 64, 255), (3, 2))
+                elif invalid == 'broken': alpha.symlink_to('missing')
+                elif invalid == 'escape':
+                    self.pvr(self.root/'outside.pvr', (64, 64, 64, 255)); alpha.symlink_to(self.root/'outside.pvr')
+                else: alpha.mkdir()
+                for corrupt_primary in (False, True):
+                    if corrupt_primary: primary.write_bytes(b'broken PVR')
+                    with self.assertRaises(NativeInputError) as original:
+                        load_native_emitter(self.folder, DIZZY_EMITTER)
+                    with self.assertRaises(NativeInputError) as cached:
+                        load_native_emitter(self.folder, DIZZY_EMITTER, texture_cache=self.cache)
+                    self.assertEqual(str(cached.exception), str(original.exception))
+                if invalid == 'directory': alpha.rmdir()
+                else: alpha.unlink()
+
+    def test_disabled_unwritable_and_corrupt_cache_preserve_successful_output(self):
+        expected = load_native_emitter(self.folder, DIZZY_EMITTER)
+        blocked = self.root/'blocked'; blocked.write_text('not a directory')
+        for cache in (TextureCache(self.root/'disabled', max_bytes=0), TextureCache(blocked), self.cache):
+            self.assertEqual(load_native_emitter(self.folder, DIZZY_EMITTER, texture_cache=cache), expected)
+        entry, = self.cache.directory.glob('*.pngcache')
+        data = bytearray(entry.read_bytes()); data[data.index(b'IDAT')+4] ^= 1; entry.write_bytes(data)
+        self.assertEqual(load_native_emitter(self.folder, DIZZY_EMITTER, texture_cache=self.cache), expected)
+        self.assertEqual((self.cache.misses, self.cache.invalid_entries), (2, 1))

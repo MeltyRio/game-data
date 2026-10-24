@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Collection
 import hashlib
+import io
 from importlib import metadata
 import json
 import os
@@ -15,7 +16,7 @@ from pathlib import Path
 import struct
 import tempfile
 
-from PIL import features
+from PIL import Image, features
 
 _HEADER = struct.Struct('>8s32sIIQ')
 _MAGIC = b'ATPTEX02'
@@ -60,12 +61,16 @@ class TextureCache:
                 png = handle.read(length + 1)
             if len(png) != length:
                 raise ValueError('Truncated texture cache entry')
+            with Image.open(io.BytesIO(png)) as image:
+                if image.format != 'PNG' or image.size != (width, height):
+                    raise ValueError('Invalid cached PNG dimensions or format')
+                image.verify()
         except FileNotFoundError:
             return None
         except OSError:
             self.io_errors += 1
             return None
-        except (ValueError, struct.error):
+        except (ValueError, SyntaxError, struct.error, Image.DecompressionBombError):
             self.invalid_entries += 1
             return None
         try:

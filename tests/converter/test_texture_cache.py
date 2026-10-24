@@ -72,6 +72,22 @@ class TextureCacheTests(unittest.TestCase):
         self.assertEqual(self.decodes, 2)
         self.assertEqual(cache.invalid_entries, 1)
 
+    def test_corrupt_png_payload_and_dimensions_are_rebuilt(self):
+        import struct
+        cache = self.cache()
+        expected = self.read(cache)
+        entry, = cache.directory.glob('*.pngcache')
+        for corrupt in ('crc', 'dimensions', 'format'):
+            with self.subTest(corrupt=corrupt):
+                data = bytearray(entry.read_bytes())
+                if corrupt == 'crc': data[data.index(b'IDAT')+4] ^= 1
+                elif corrupt == 'dimensions': struct.pack_into('>I', data, 40, 99)
+                else: data[56:64] = b'not PNG!'
+                entry.write_bytes(data)
+                self.assertEqual(self.read(cache), expected)
+        self.assertEqual(self.decodes, 4)
+        self.assertEqual(cache.misses, 4)
+
     def test_eviction_bounds_disk_bytes_and_evicts_oldest(self):
         cache = self.cache(max_bytes=400)
         self.read(cache)

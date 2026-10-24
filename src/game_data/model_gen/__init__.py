@@ -222,7 +222,7 @@ def generate_models(native_objects: GameObjectData, extracted_dir: str | Path, d
                             raise ValueError('Unsupported native emitter attributes')
                         name = attributes['Particle']
                         if name not in interaction_effects:
-                            profile, png, provenance = load_native_emitter(folder, name)
+                            profile, png, provenance = load_native_emitter(folder, name, texture_cache=texture_cache)
                             interaction_effects[name] = {'profile': profile, 'png_bytes': png}
                             effect_provenance[name] = provenance
                         return {'frame': frame, 'type': 'Emitter', 'effect': name}
