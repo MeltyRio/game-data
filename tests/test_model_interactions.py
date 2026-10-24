@@ -50,6 +50,76 @@ class NativeControls(unittest.TestCase):
                                     clips=self.clips, **kwargs)
 
 
+    def prepare_event_paths(self, paths, clips=None, **kwargs):
+        clips = self.clips if clips is None else clips
+        base = {'clip_names': [clip['name'] for clip in clips], 'excluded_clips': [],
+                'visible_meshes': ['body'], 'provenance': {},
+                'event_path': paths[0], 'additional_event_paths': paths[1:]}
+        return prepare_interactions(base, 'Pony', self.obj, model_stem='body',
+                                    mesh_names=self.names, clips=clips, **kwargs)
+
+    def test_event_paths_resolve_once_per_call_and_preserve_alias_approvals(self):
+        other = self.root/'other.xml'
+        other.write_text('<MeshList/><AnimationList/>')
+        alias = self.root/'alias.xml'
+        alias.symlink_to(self.path.name)
+        names = [clip['name'] for clip in self.clips]
+        resolve = Path.resolve
+        for second in (other, alias):
+            with self.subTest(second=second.name):
+                expected = {}
+                for name in names:
+                    for path in (self.path, second):
+                        expected.setdefault(path.resolve(), []).append(name)
+                with patch.object(Path, 'resolve', autospec=True, side_effect=resolve) as resolutions:
+                    first = self.prepare_event_paths([self.path, second, self.path, second])
+                    self.assertEqual(resolutions.call_count, 2)
+                    again = self.prepare_event_paths([self.path, second, self.path, second])
+                    self.assertEqual(resolutions.call_count, 4)
+                self.assertEqual(first, again)
+                self.assertEqual(first['clip_names'], names)
+                self.assertEqual(first['event_approvals'], expected)
+                self.assertEqual(first['animation_events']['wave'], [
+                    {'frame': 1, 'type': 'EyeSet', 'state': 'Closed', 'enableBlink': True}])
+
+    def test_event_paths_are_not_resolved_without_approved_clips(self):
+        self.xml('<Frame Index="1"><Sound Name="test"/></Frame>')
+        for clips in ([], [self.clips[1]]):
+            with self.subTest(clips=clips):
+                with patch.object(Path, 'resolve', side_effect=AssertionError('Unexpected resolution')) as resolutions:
+                    result = self.prepare_event_paths([self.path], clips)
+                resolutions.assert_not_called()
+                self.assertEqual(result['clip_names'], [])
+                self.assertEqual(result['excluded_clips'], [
+                    {'name': 'wave', 'reason': 'unsupported-native-event:Sound'}] if clips else [])
+
+    def test_missing_event_file_still_fails_before_resolution(self):
+        missing = self.root/'missing.xml'
+        for clips in ([], self.clips):
+            with self.subTest(clips=clips):
+                with patch.object(Path, 'resolve', side_effect=AssertionError('Unexpected resolution')) as resolutions:
+                    with self.assertRaises(FileNotFoundError) as raised:
+                        self.prepare_event_paths([missing], clips)
+                self.assertEqual(raised.exception.filename, str(missing))
+                resolutions.assert_not_called()
+
+    def test_event_path_resolution_errors_propagate_after_event_compilation(self):
+        self.xml('<Frame Index="1"><Emitter Particle="test"/></Frame>')
+        for error in (OSError('Cannot resolve path'), RuntimeError('Cannot resolve path')):
+            with self.subTest(error=type(error).__name__):
+                calls = []
+                def effect(attrs, frame):
+                    calls.append('event')
+                    return {'frame': frame, 'type': 'Emitter', 'effect': attrs['Particle']}
+                def fail(path):
+                    calls.append('resolve')
+                    raise error
+                with patch.object(Path, 'resolve', autospec=True, side_effect=fail):
+                    with self.assertRaises(type(error)) as raised:
+                        self.prepare_event_paths([self.path], [self.clips[1]], effect_resolver=effect)
+                self.assertIs(raised.exception, error)
+                self.assertEqual(calls, ['event', 'resolve'])
+
     def test_duplicate_native_eye_meshes_have_original_indices(self):
         result = self.run_selection()
         self.assertEqual(result['model_interactions']['eyes']['Closed'], [2, 3])

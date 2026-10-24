@@ -151,6 +151,7 @@ def prepare_interactions(selection: dict, category: str, obj: GameObject, *,
         *requested_clicks, 'arena_pony_defeat', *(clip['name'] for clip in clips)]))
     retained = set(selection['visible_meshes']) | {mesh_names[i] for i in all_eyes}
     events, selected, approvals = {}, [], {}
+    resolved_paths = {}
     supported_types = {'EyeSet', 'Emitter', 'SubObject'}
     subobjects = set()
     for name in candidates:
@@ -214,7 +215,9 @@ def prepare_interactions(selection: dict, category: str, obj: GameObject, *,
         retained |= needed
         subobjects.update(i for event in compiled if event['type'] == 'SubObject' for i in event['meshes'])
         for path, _ in documents:
-            approvals.setdefault(path.resolve(), []).append(name)
+            if path not in resolved_paths:
+                resolved_paths[path] = path.resolve()
+            approvals.setdefault(resolved_paths[path], []).append(name)
     click_names = [name for name in requested_clicks if name in selected]
     profile = {'version': 1, 'clickAnimations': click_names}
     model_profile = {'version': 1}
