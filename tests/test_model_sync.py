@@ -216,6 +216,7 @@ class ModelSync(unittest.TestCase):
         remote_catalogue = self.client.objects[self.bucket, 'models_3d.json']['Body']
         manifest = json.loads(self.client.objects[self.bucket, 'manifest.json']['Body'])
         self.assertEqual(manifest['models_3d.json'], hashlib.sha256(remote_catalogue).hexdigest())
+        self.assertEqual(set(manifest), {'game_objects.json', 'models_3d.json'})
         self.assertNotIn(b'\n', remote_catalogue)
 
     def test_model_upload_progress_counts_completed_assets(self):

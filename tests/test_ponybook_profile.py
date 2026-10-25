@@ -102,6 +102,36 @@ class PonyBookProfileTests(unittest.TestCase):
         self.assertEqual(result['provenance']['display']['ponybook_unavailable']['code'],
                          'invalid_event_source')
 
+    def test_missing_world_xml_keeps_book_event_checks(self):
+        (self.folder/'world.xml').unlink()
+        result = self.select()
+        self.assertIsNone(result['event_path'])
+        self.assertTrue(result['events_absent'])
+        self.assertEqual(result['additional_event_paths'], [self.folder/'book.xml'])
+        self.assertIn('world_event', result['clip_names'])
+        self.assertNotIn('book_event', result['clip_names'])
+        self.assertEqual(result['rest_name'], 'gen_idle_00')
+
+    def test_present_invalid_world_xml_is_not_an_empty_controller(self):
+        (self.folder/'world.xml').write_text('<broken')
+        self.fails('invalid_event_source', profile='ponybook-preferred')
+
+    def test_unmatched_native_eye_names_preserve_all_meshes(self):
+        self.obj['Eyes'] = {'EyeSubObject_' + state: ['missing_' + state]
+                           for state in ('Open', 'Closed', 'Happy', 'Frown')}
+        self.obj['Eyes']['EyeSubObject_Closed'].append('eyes_shut')
+        result = self.select('world-preview')
+        self.assertEqual(result['visible_meshes'], self.meshes)
+        from game_data.model_gen.interactions import prepare_interactions
+        extended = prepare_interactions(result, 'Pony', self.obj,
+            model_stem='body', mesh_names=self.meshes, clips=self.clips)
+        self.assertNotIn('eyes', extended.get('model_interactions', {}))
+        self.assertEqual(extended['visible_meshes'], self.meshes)
+
+    def test_missing_open_with_partially_matching_eye_controls_remains_rejected(self):
+        self.obj['Eyes'] = {'EyeSubObject_Open': ['missing'], 'EyeSubObject_Closed': ['eyes_shut']}
+        self.fails('missing_open_eye_mesh', profile='world-preview')
+
 
     def test_present_conversation_selects_exact_name_not_prefix(self):
         self.obj['Conversation'] = {'IdleAnimation': 'other_idle'}
@@ -132,7 +162,9 @@ class PonyBookProfileTests(unittest.TestCase):
         current = self.select(event_files=index_event_files(self.folder))
         self.assertEqual(current['provenance']['ponybook']['event_source'], 'xml')
         (self.folder/'world.xml').unlink()
-        self.fails('missing_event_source', event_files=index_event_files(self.folder))
+        current = self.select(event_files=index_event_files(self.folder))
+        self.assertIsNone(current['event_path'])
+        self.assertTrue(current['events_absent'])
 
     def test_filename_index_rejects_nonexact_names(self):
         # Use the actual filesystem's result: case-insensitive lookup must

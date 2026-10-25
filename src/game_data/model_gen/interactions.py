@@ -122,17 +122,7 @@ def prepare_interactions(selection: dict, category: str, obj: GameObject, *,
     diagnostics = []
     paths = list(dict.fromkeys([path for path in [selection.get('event_path'), *selection.get('additional_event_paths', [])] if path]))
     documents = [(path, read_events(path)) for path in paths]
-    evidence = selection['provenance']
-    if evidence.get('display', {}).get('selected') == 'ponybook-default':
-        eye_names = {state: [evidence['ponybook']['eyes'][state]] for state in STATES}
-        enabled = evidence['ponybook']['eye_controller_enabled']
-    else:
-        source = evidence.get('eyes', {})
-        eye_names = source.get('groups', {state: [] for state in STATES})
-        if source.get('resolved_native_controller'):
-            eye_names = {state: [source['resolved_native_controller'][state]] for state in STATES}
-        enabled = source.get('enabled', True)
-    eyes = {state: [i for i, name in enumerate(mesh_names) if enabled and name in eye_names.get(state, [])] for state in STATES}
+    eyes = resolve_eye_meshes(selection, mesh_names)
     all_eyes = set().union(*map(set, eyes.values()))
     visible = set(selection['visible_meshes'])
     # Never change a verified default appearance merely to make blinking work.
@@ -241,3 +231,18 @@ def prepare_interactions(selection: dict, category: str, obj: GameObject, *,
         'sources': [path.name for path, _ in documents],
         'clickPolicy': 'viewer randomly chooses from native allowed branches; remote-service gate and directional choice are not simulated'}
     return result
+
+
+def resolve_eye_meshes(selection: dict, mesh_names: list[str]) -> dict[str, list[int]]:
+    """Resolve the selected native eye controller independently of optional playback."""
+    evidence = selection['provenance']
+    if evidence.get('display', {}).get('selected') == 'ponybook-default':
+        eye_names = {state: [evidence['ponybook']['eyes'][state]] for state in STATES}
+        enabled = evidence['ponybook']['eye_controller_enabled']
+    else:
+        source = evidence.get('eyes', {})
+        eye_names = source.get('groups', {state: [] for state in STATES})
+        if source.get('resolved_native_controller'):
+            eye_names = {state: [source['resolved_native_controller'][state]] for state in STATES}
+        enabled = source.get('enabled', True)
+    return {state: [i for i, name in enumerate(mesh_names) if enabled and name in eye_names.get(state, [])] for state in STATES}

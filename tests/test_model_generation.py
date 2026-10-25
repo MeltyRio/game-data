@@ -216,6 +216,23 @@ class ModelGeneration(unittest.TestCase):
                 '</AnimationList>', encoding='utf-8')
 
 
+    def test_missing_world_xml_matches_an_explicit_empty_controller(self):
+        self.prepare_book_and_world_contexts()
+        world = self.native/'world.xml'
+        world.write_text('<MeshList/><AnimationList/>')
+        self.generate()
+        expected = self.assert_closed()
+        files = {str(path.relative_to(self.dist)): path.read_bytes()
+                 for path in (self.dist/'models/3d').rglob('*.glb')}
+        world.unlink()
+
+        report = self.generate()
+
+        self.assertEqual(report['generation']['excluded'], {})
+        self.assertEqual(self.assert_closed(), expected)
+        self.assertTrue(all((self.dist/name).read_bytes() == data for name, data in files.items()))
+        self.assertEqual(report['identities']['Synthetic_Flag']['selection']['events']['requested_file'], 'world.xml')
+
     def test_normal_generation_uses_empty_book_controller_then_reads_restored_xml(self):
         self.prepare_book_and_world_contexts()
         self.generate(display_profile='world-preview')
@@ -378,6 +395,153 @@ class ModelGeneration(unittest.TestCase):
         outfit = self.catalogue()['models']['Synthetic_Outfit']
         self.generate(public_identities={'Synthetic_Outfit'})
         self.assertEqual(self.assert_closed()['models'], {'Synthetic_Outfit': outfit})
+
+    def test_outfit_uses_its_page_owner_without_merging_owner_defaults(self):
+        self.prepare_wardrobe(second_owner=True)
+        owner = self.objects['Pony']['Synthetic_SecondOwner']
+        owner['Conversation']['IdleAnimation'] = 'wave'
+        report = self.generate(public_identities={'Synthetic_Outfit'},
+            outfit_owners={'Synthetic_Outfit': 'Synthetic_SecondOwner'})
+        self.assertEqual(report['generation']['excluded'], {})
+        self.assertEqual(set(self.assert_closed()['models']), {'Synthetic_Outfit'})
+        row = report['identities']['Synthetic_Outfit']
+        self.assertEqual(row['owner'], 'Synthetic_SecondOwner')
+        self.assertEqual(row['selection']['rest']['name'], 'wave')
+        self.assertEqual(self.model_mesh_names('Synthetic_Outfit'),
+                         {'flag', 'body1', 'mane0', 'tail1', 'uncontrolled_trim'})
+
+    def prepare_standalone_parts(self):
+        self.prepare_wardrobe(linked_tail=False)
+        tree = ET.parse(self.native/'gameobjectdata.xml')
+        ponies = tree.find("./Category[@ID='Pony']")
+        ponies.remove(ponies.find("./GameObject[@ID='Synthetic_Flag']"))
+        ponies.find('./GameObject/Eyes/EyeSubObject_Open').clear()
+        outfits = tree.find("./Category[@ID='PonySet']")
+        outfits.remove(outfits.find("./GameObject[@ID='Synthetic_DefaultSet']"))
+        outfits.find('./GameObject/Parts').attrib.update(Body='body0', Mane='mane0', Tail='tail0')
+        for part in tree.findall("./Category[@ID='PonyPart']/GameObject/PonyPart"):
+            part.set('ModelName', 'flag')
+        tree.write(self.native/'gameobjectdata.xml', encoding='utf-8')
+        self.objects = GameObjectData(self.native/'gameobjectdata.xml', self.native/'shopdata.xml',
+                                      self.native/'gameobjectcategorydata.xml')
+
+    def test_standalone_parts_preview_keeps_identity_without_creating_ownership(self):
+        self.prepare_standalone_parts()
+        report = self.generate(public_identities={'Synthetic_Outfit'})
+        outfit = self.assert_closed()['models']['Synthetic_Outfit']
+        expected_bytes = (self.dist/outfit['path']).read_bytes()
+        row = report['identities']['Synthetic_Outfit']
+        self.assertEqual(row['owners'], [])
+        self.assertNotIn('owner', row)
+        self.assertEqual(row['preview_source'], 'Synthetic_Unrelated')
+        self.assertEqual(row['preview_relation'], 'standalone-parts-preview')
+        self.assertNotIn('wardrobe', outfit)
+        self.assertEqual(self.model_mesh_names('Synthetic_Outfit'), {'flag'})
+        self.assertEqual(self.model_document('Synthetic_Outfit')['extras']['atpModel']['identity'], 'Synthetic_Outfit')
+        self.assertEqual(self.objects['Pony']['Synthetic_Unrelated']['Sets']['Sets'], [])
+
+        reads = []
+        original_read = RKModel.read
+        def read(model, path):
+            reads.append(Path(path).name)
+            return original_read(model, path)
+        with patch.object(RKModel, 'read', read):
+            self.generate()
+        self.assertEqual(reads, ['flag.rk'])
+        models = self.assert_closed()['models']
+        self.assertEqual(models['Synthetic_Outfit'], outfit)
+        self.assertEqual((self.dist/outfit['path']).read_bytes(), expected_bytes)
+        self.assertEqual(models['Synthetic_Unrelated']['animations'], outfit['animations'])
+
+    def test_standalone_parts_require_one_exact_complete_native_scene(self):
+        from copy import deepcopy
+        self.prepare_standalone_parts()
+        source = deepcopy(self.objects)
+        for case in ('ambiguous', 'ambiguous_invalid_animation', 'absent', 'partial',
+                     'extra_geometry', 'explicit_unregistered_owner'):
+            with self.subTest(case=case):
+                self.objects = deepcopy(source)
+                kwargs = {}
+                if case.startswith('ambiguous'):
+                    self.objects['Pony']['Synthetic_Second'] = deepcopy(self.objects['Pony']['Synthetic_Unrelated'])
+                    if case == 'ambiguous_invalid_animation':
+                        self.objects['Pony']['Synthetic_Second']['Animation']['Rig_MediumLOD'] = 'absent'
+                elif case in ('absent', 'partial'):
+                    ids = ('body0', 'mane0', 'tail0') if case == 'absent' else ('body0',)
+                    for identity in ids:
+                        self.objects['PonyPart'][identity]['PonyPart']['ModelName'] = 'FLAG'
+                elif case == 'extra_geometry':
+                    self.objects['Pony']['Synthetic_Unrelated']['Model']['MediumLOD'] = 'wardrobe'
+                    for identity in ('body0', 'mane0', 'tail0'):
+                        self.objects['PonyPart'][identity]['PonyPart']['ModelName'] = 'body1'
+                else:
+                    kwargs['outfit_owners'] = {'Synthetic_Outfit': 'Synthetic_Unrelated'}
+                report = self.generate(**kwargs)
+                self.assertNotIn('Synthetic_Outfit', self.assert_closed()['models'])
+                self.assertIn('Synthetic_Outfit', report['generation']['excluded'])
+
+    def test_standalone_parts_do_not_silently_include_later_visible_props(self):
+        self.prepare_standalone_parts()
+        obj = self.objects['Pony']['Synthetic_Unrelated']
+        obj['Model']['MediumLOD'] = 'wardrobe'
+        obj['Animation']['LeftIdleAnimationList'] = ['rest']
+        for identity in ('body0', 'mane0', 'tail0'):
+            self.objects['PonyPart'][identity]['PonyPart']['ModelName'] = 'body1'
+        hidden = ('flag', 'body0', 'mane0', 'tail0', 'tail1', 'uncontrolled_trim')
+        (self.native/'flag.xml').write_text('<MeshList><wardrobe>' + ''.join(
+            f'<SubObject ID="{name}" Name="{name}" DefaultVisible="0"/>' for name in hidden) +
+            '</wardrobe></MeshList><AnimationList><Animation Name="wave">'
+            '<Frame Index="1"><SubObject ID="uncontrolled_trim" Show="1"/></Frame>'
+            '</Animation></AnimationList>')
+        report = self.generate()
+        self.assertEqual(set(self.assert_closed()['models']), {'Synthetic_Unrelated'})
+        self.assertEqual(report['generation']['excluded']['Synthetic_Outfit']['code'], 'incomplete_part_preview')
+        self.assertIn('beyond the declared parts', report['generation']['excluded']['Synthetic_Outfit']['reason'])
+
+    def test_standalone_parts_keep_part_and_source_campaign_checks(self):
+        self.prepare_standalone_parts()
+        for category, identity in [('PonyPart', 'body0'), ('Pony', 'Synthetic_Unrelated')]:
+            with self.subTest(category=category):
+                with self.assertRaisesRegex(ValueError, 'No verified basic'):
+                    self.generate(public_identities={'Synthetic_Outfit'}, campaign={
+                        'game_object_data': {category: {identity: {'ModelName': 'changed'}}}})
+                report = json.loads(self.report.read_text())
+                self.assertEqual(report['generation']['excluded']['Synthetic_Outfit']['code'],
+                                 'campaign_visual_override_unverified')
+
+        parts = {}
+        for slot in ('Body', 'Mane', 'Tail'):
+            identity = 'Source_' + slot
+            parts[slot] = identity
+            self.objects['PonyPart'][identity] = {
+                'PonyPart': {'Type': slot, 'ModelName': 'flag', 'LinkedPart': ''}}
+        self.objects['PonySet']['Source_Default'] = {'Parts': parts, 'PonySet': {'SubSets': []}}
+        self.objects['Pony']['Synthetic_Unrelated']['Sets']['Sets'] = ['Source_Default']
+        with self.assertRaisesRegex(ValueError, 'No verified basic'):
+            self.generate(public_identities={'Synthetic_Outfit'}, campaign={'game_object_data': {
+                'PonyPart': {'Source_Body': {'ModelName': 'changed'}}}})
+        report = json.loads(self.report.read_text())
+        self.assertEqual(report['generation']['excluded']['Synthetic_Outfit']['code'],
+                         'campaign_visual_override_unverified')
+
+    def test_standalone_static_open_does_not_require_optional_interactions(self):
+        self.prepare_standalone_parts()
+        obj = self.objects['Pony']['Synthetic_Unrelated']
+        obj['Model']['MediumLOD'] = 'wardrobe'
+        obj['Eyes'] = {'EyeSubObject_Open': ['flag']}
+        obj['Conversation'] = {'IdleAnimation': 'rest', 'InteractionAnimation': ''}
+        for identity in ('body0', 'mane0', 'tail0'):
+            self.objects['PonyPart'][identity]['PonyPart']['ModelName'] = 'body1'
+        hidden = ('body0', 'mane0', 'tail0', 'tail1', 'uncontrolled_trim')
+        (self.native/'flag.xml').write_text('<MeshList><wardrobe>' + ''.join(
+            f'<SubObject ID="{name}" Name="{name}" DefaultVisible="0"/>' for name in hidden) +
+            '</wardrobe></MeshList><AnimationList/>')
+        for profile in ('world-preview', 'ponybook-preferred'):
+            with self.subTest(profile=profile):
+                report = self.generate(public_identities={'Synthetic_Outfit'}, display_profile=profile)
+                self.assertEqual(report['generation']['excluded'], {})
+                self.assertEqual(self.model_mesh_names('Synthetic_Outfit'), {'body1', 'flag'})
+                self.assertNotIn('interactions', self.assert_closed()['models']['Synthetic_Outfit'])
 
 
 if __name__ == '__main__':

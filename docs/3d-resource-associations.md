@@ -82,7 +82,7 @@ references are uploaded.
 | --- | --- | --- | --- |
 | Pony | `Model.MediumLOD` | `Animation.Rig_MediumLOD` | Valid associated CSV actions; native Animation/Conversation preferences and appearance |
 | PonyPet | `Object.Model` | `Object.Animation` | Valid associated CSV actions; Idle/Walk/Run/EditorIdle preferences and reviewed empty-Idle rule below |
-| PonySet | Unique owner's model | Same owner's library | `Sets.Sets` / `SubSets` ownership, `Parts` and `PonyPart` |
+| PonySet | Registered page/unique owner, or exact standalone parts scene | Same native scene's library | `Sets.Sets` / `SubSets` ownership; standalone preview uses exact `Parts` / `PonyPart` mesh references |
 | AdditionalObject | `AdditionalObject.Model` | The same Model stem | One independent child; original CSV order and native placement |
 
 The declared external library stem identifies **both** `.anim` and `.csv`.
@@ -177,9 +177,33 @@ hop. Slot conflicts, missing part records and deeper unverified links fail.
 control visibility. A declared name absent from the RK is recorded as a native
 name-lookup no-op; it is not replaced by a similar mesh or by the default part.
 This also permits a declared empty-tail part to hide other registered tails.
-Unknown ownership remains unresolved: no name matching or quest-clone preference.
+The normal build supplies the existing public `costume.pony` page context. It
+must be one of the owners explicitly registering the set through `Sets.Sets` or
+`SubSets`; it cannot create a missing native relationship. Without a supplied
+context, ownership must be unique. All registered owners remain in diagnostics;
+the selected owner's eyes, default parts and animation context stay independent.
+Unknown ownership is never filled by name matching or quest-clone preference.
 An ATP outfit entry represents a complete outfit preview, not saved player
 mixed equipment or an interactive wardrobe.
+
+For an unregistered set with no supplied page owner, a standalone parts preview
+can use a unique existing native Pony scene containing every expanded
+`PonyPart.ModelName`. Matching uses parsed RK mesh names, including all native
+Pony contexts independently of the requested public identities or animation
+conversion success. Normal generation reuses its already read mesh metadata;
+a costume-only build reads missing metadata with the existing RK loader.
+The scene retains its own verified model, materials, eyes, pose and library.
+Default visible meshes must be exactly the declared parts plus resolved Open
+eyes; retained animation meshes may add only the other resolved eye states.
+Additional actors, ambiguous/partial matches and visual campaign overrides
+remain exclusions. The source scene's existing display-model selection stays
+explicit in its model/declaration provenance; it is not a new filename rule.
+
+This is a representation of the explicit parts, not wardrobe ownership. The
+private report records `preview_source` and `standalone-parts-preview`, keeps
+`owners=[]`, and never adds `owner` or changes public `costume.pony`. It does not
+register the outfit, pass an invented outfit ID to the source actor, or expose
+that actor's interactive wardrobe. All native source validation still applies.
 
 The World preview uses explicit Pony Eyes declarations or native category
 defaults. Missing Eyes and explicit empty Open groups stay distinct. An explicitly empty Open group
@@ -187,12 +211,13 @@ leaves the reviewed native eye controller disabled: initialization, blink and
 EyeSet paths do not hide the other groups. The RK meshes therefore retain their
 initial visibility, subject to the separate wardrobe and MeshList controls.
 
-A missing nonempty Open mesh is normally refused. A narrow exception covers a
-single actual RK mesh without a wardrobe when **none** of the declared eye names,
-their native literal `lod0` to `lod1` substitutions or native constructor defaults
-match it. Every reviewed eye show/hide lookup is then a no-op. The check uses a
-superset of possible names; it does not invent a replacement or generalize to
-multiple meshes. Unknown states and malformed declarations remain errors.
+A missing nonempty Open mesh is normally refused. When **none** of the native
+first-Item eye names, after the first literal `lod0` to `lod1` substitution,
+matches an RK mesh, every eye show/hide lookup is a no-op. Configured names
+replace constructor defaults; they do not fall back to similarly named eyes.
+The original mesh visibility remains subject to MeshList and wardrobe controls.
+This also preserves overlapping source eye layers rather than choosing an
+invented Open layer. Unknown states and malformed declarations remain errors.
 
 For nonempty matching groups, exact array matching is the World static preview
 policy. The reviewed 11.4.3c Pony constructor instead reads the first Item of each state
@@ -217,10 +242,11 @@ resulting visible meshes must equal the already verified World selection. A
 missing required Open mesh or an XML-controlled visibility disagreement retains
 the World preview under `ponybook-preferred`, with a diagnostic.
 
-If the exact Book XML is absent from the supplied inputs, use the reviewed native
-empty controller: no XML mesh defaults or events, while Eyes, wardrobe and idle
-selection still apply. World mesh defaults are not substituted. Private provenance
-records `missing-input-native-empty-controller` and the requested filename.
+If the exact World or Book XML is absent from the supplied inputs, use the
+reviewed shared native loader's empty controller: no XML mesh defaults or events,
+while Eyes, wardrobe and idle selection still apply. The two contexts retain
+their own filenames and defaults. Private provenance records
+`missing-input-native-empty-controller` and the requested filename.
 This describes the supplied input set, not every resource mounted by the game;
 it cannot distinguish an unprovided XML from an earlier download/extraction failure.
 Existing error logging and continuation remain unchanged. A present malformed,
@@ -264,9 +290,9 @@ excluding event-bearing actions until the interaction compiler below verifies
 all their events. Constructor pose and later Book idle retain their existing
 strict checks against both contexts. The converter independently
 checks all selected event sources before producing a bundle, including
-when the World branch has a positively absent controller. Required World XML
-remains mandatory even when Book uses an empty controller. Unknown events remain
-unsupported.
+when either branch uses an empty controller. A present XML is still parsed and
+checked independently; malformed, unreadable, unsafe or ambiguous sources cannot
+become empty controllers. Unknown events remain unsupported.
 
 `ponybook-default` exposes strict selection; `ponybook-preferred` first requires
 a valid World result, then records a concrete Book failure and retains that old

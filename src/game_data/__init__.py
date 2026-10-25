@@ -324,6 +324,9 @@ def build_cdn(
             report = generate_models(
                 native_objects, extracted_dir, dist_dir, raw_dir/'model-associations.json',
                 campaign=campaign, public_identities=public_identities,
+                outfit_owners={identity: costume.pony
+                               for identity, costume in game_data.game_objects.costume.objects.items()
+                               if costume.pony},
                 failed_rkms=failed_rkms, animation_cache=model_cache,
             )
             console.print(report['summary'])

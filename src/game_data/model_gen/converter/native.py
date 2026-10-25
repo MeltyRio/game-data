@@ -84,6 +84,20 @@ def _validate_model_layout(model: RKModel) -> None:
         raise NativeInputError("Unsupported RK position/UV layout")
 
 
+def read_model_mesh_names(path: str | Path) -> list[str]:
+    """Read discovery metadata; selected scenes still require full load_model validation."""
+    from luna_kit.model import RKModel
+
+    try:
+        model = RKModel()
+        with Path(path).open('rb') as stream:
+            model.header = model._read_header(stream)
+            model.section_headers = model._read_sections_header(stream)
+            return [mesh.name for mesh in model._read_submesh_info(stream)]
+    except (ValueError, AssertionError, IndexError, struct.error) as error:
+        raise NativeInputError(f'RK metadata parse failed: {Path(path).name}: {error}') from error
+
+
 def load_model(path: str | Path) -> RKModel:
     """Read one RK for both native appearance selection and conversion."""
     from luna_kit.model import RKModel

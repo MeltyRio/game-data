@@ -5,7 +5,7 @@ not a converter or a claim that an extracted folder is a complete game release.
 The report belongs in raw/, never in the public dist/ or models_3d.json.
 """
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 import json
 import struct
 from pathlib import Path
@@ -105,7 +105,8 @@ def _parts(outfit: GameObject, parts: dict[str, GameObject]) -> dict[str, dict[s
         raise AssociationError(str(error)) from error
 
 
-def discover_associations(game_objects: GameObjectData, extracted_dir: str | Path) -> dict:
+def discover_associations(game_objects: GameObjectData, extracted_dir: str | Path, *,
+                          outfit_owners: Mapping[str, str] | None = None) -> dict:
     """Return traceable declarations and blockers; never mark a GLB successful.
 
     Paths are resolved only from explicit fields. RK parsing, layout and bone
@@ -114,6 +115,7 @@ def discover_associations(game_objects: GameObjectData, extracted_dir: str | Pat
     see docs/3d-resource-associations.md for evidence and version boundaries.
     """
     folder = Path(extracted_dir)
+    outfit_owners = outfit_owners or {}
     rows, model_cache, anim_cache, csv_cache = {}, {}, {}, {}
     # Extracted inputs stay fixed during one discovery; refresh on the next call.
     name_index: dict[str, list[str]] = {}
@@ -248,16 +250,21 @@ def discover_associations(game_objects: GameObjectData, extracted_dir: str | Pat
         rows[identity] = row
         try:
             row['parts'] = _parts(outfit, parts)
-            if len(row['owners']) != 1 or set_errors:
+            owner_id = outfit_owners.get(identity)
+            if owner_id is None and len(row['owners']) == 1:
+                owner_id = row['owners'][0]
+            if owner_id not in row['owners'] or set_errors:
                 # A malformed owner's set graph can conceal another owner.
-                raise AssociationError('No unique, complete native outfit ownership')
-            owner = rows[row['owners'][0]]
+                raise AssociationError('No verified native outfit owner for the requested context')
+            owner = rows[owner_id]
             if not owner['references_resolved']:
                 raise AssociationError('Outfit owner has unresolved resources')
             row['model'], row['animation'] = owner['model'], owner['animation']
             row['csv'] = dict(owner['csv'])
             row['declaration'] = dict(owner['declaration'])
-            row['owner'] = row['owners'][0]
+            row['owner'] = owner_id
+            if identity in outfit_owners:
+                row['owner_source'] = 'public.costume.pony'
             row['references_resolved'] = True
             row['blockers'] += owner['blockers']
         except (ValueError, OSError) as error:

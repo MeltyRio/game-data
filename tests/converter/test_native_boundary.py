@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from game_data.model_gen.converter.native import NativeInputError, load_model, load_native
+from game_data.model_gen.converter.native import NativeInputError, load_model, load_native, read_model_mesh_names
 from game_data.model_gen.converter.export import convert_native
 from native_fixture import write_fixture
 
@@ -59,6 +59,19 @@ class NativeBoundaryTests(unittest.TestCase):
                  if str(call.args[0]) == str(path)]
         self.assertEqual(len(reads), 1)
         self.assertEqual([mesh.name for mesh in model.meshes], ['flag'])
+
+    def test_mesh_name_discovery_keeps_luna_section_validation(self):
+        path = self.folder/'flag.rk'
+        valid = path.read_bytes()
+        self.assertEqual(read_model_mesh_names(path), [mesh.name for mesh in load_model(path).meshes])
+        names = next(80 + i * 16 for i in range(24)
+                     if struct.unpack_from('<I', valid, 80 + i * 16)[0] == 16)
+        for raw in (valid[:79], valid[:463],
+                    valid[:names] + struct.pack('<4I', 16, len(valid), 1, 64) + valid[names + 16:]):
+            with self.subTest(length=len(raw)):
+                path.write_bytes(raw)
+                with self.assertRaises(NativeInputError):
+                    read_model_mesh_names(path)
 
     def test_rk_uses_lunas_declared_face_offsets(self):
         path = self.folder/'flag.rk'

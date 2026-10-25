@@ -68,6 +68,30 @@ class Associations(unittest.TestCase):
         self.assertEqual(len(row['owners']), 2)
         self.assertFalse(row['references_resolved'])
 
+    def test_public_outfit_owner_must_be_registered_by_native_tables(self):
+        self.add_outfit()
+        self.objects['Pony']['Pony_Other'] = copy.deepcopy(self.objects['Pony']['Pony_Test'])
+        result = audit.discover_associations(self.objects, self.folder,
+            outfit_owners={'Set_Test': 'Pony_Other'})
+        row = result['identities']['Set_Test']
+        self.assertTrue(row['references_resolved'])
+        self.assertEqual(row['owner'], 'Pony_Other')
+        self.assertEqual(row['owners'], ['Pony_Other', 'Pony_Test'])
+
+        self.objects['Pony']['Pony_Unrelated'] = pony()
+        for owner in ('Pony_Unrelated', 'Pony_Missing'):
+            with self.subTest(owner=owner):
+                result = audit.discover_associations(self.objects, self.folder,
+                    outfit_owners={'Set_Test': owner})
+                self.assertFalse(result['identities']['Set_Test']['references_resolved'])
+
+    def test_public_owner_does_not_create_an_unregistered_outfit_relationship(self):
+        self.add_outfit()
+        self.objects['Pony']['Pony_Test']['Sets']['Sets'] = []
+        result = audit.discover_associations(self.objects, self.folder,
+            outfit_owners={'Set_Test': 'Pony_Test'})
+        self.assertFalse(result['identities']['Set_Test']['references_resolved'])
+
 
 if __name__ == '__main__':
     unittest.main()

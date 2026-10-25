@@ -40,8 +40,7 @@ def index_event_files(folder: Path) -> dict[str, list[str]]:
     return names
 
 
-def _event_file(folder: Path, stem: str, *, event_files: dict[str, list[str]],
-                allow_missing: bool = False) -> Path | None:
+def _event_file(folder: Path, stem: str, *, event_files: dict[str, list[str]]) -> Path | None:
     if (not isinstance(stem, str) or not stem or stem in {'.', '..'}
             or any(c in stem for c in '/\\\0') or any(ord(c) < 32 for c in stem)):
         _fail('invalid_event_source', 'Unsafe or missing event resource stem')
@@ -51,7 +50,7 @@ def _event_file(folder: Path, stem: str, *, event_files: dict[str, list[str]],
     name = stem + '.xml'
     path = folder / name
     matches = event_files.get(name.casefold(), [])
-    if allow_missing and not matches:
+    if not matches:
         return None
     if not path.is_file():
         _fail('missing_event_source', 'Missing extracted event XML: ' + name)
@@ -117,8 +116,7 @@ def _events(path: Path, model_stem: str, mesh_names: set[str]) -> tuple[dict[str
     return defaults, eventful, sorted(absent_hidden)
 
 
-def _eyes(obj: GameObject, game_objects: GameObjectData, mesh_names: set[str], *,
-          allow_single_mesh_noop: bool = False) -> tuple[set[str], set[str], dict]:
+def _eyes(obj: GameObject, game_objects: GameObjectData, mesh_names: set[str]) -> tuple[set[str], set[str], dict]:
     data = obj.get('Eyes')
     source = 'Eyes'
     known_fields = {'EyeSubObject_' + state for state in ('Open', 'Closed', 'Happy', 'Frown')}
@@ -145,20 +143,21 @@ def _eyes(obj: GameObject, game_objects: GameObjectData, mesh_names: set[str], *
                               'groups': {k: sorted(v) for k, v in groups.items()},
                               'enabled': False,
                               'rule': 'reviewed-empty-Open-disables-eye-controller'}
+    native_groups = {
+        state: (data.get('EyeSubObject_' + state, [''])[0]
+                if data.get('EyeSubObject_' + state) else '').replace('lod0', 'lod1', 1)
+        for state in groups
+    }
+    native_names = set(native_groups.values())
     opened = groups['Open'].intersection(mesh_names)
     if not opened:
-        # Native exact-name show/hide does nothing when lookup fails. Restrict
-        # this proof to one actual mesh without wardrobe: check a superset of
-        # first-Item names, the native literal lod0 -> lod1 substitution, and
-        # constructor defaults, without choosing a replacement eye mesh.
-        names = set().union(*groups.values())
-        candidates = names | {name.replace('lod0', 'lod1', 1) for name in names}
-        candidates |= {'eyes_open', 'eyes_shut', 'eyes_happy', 'eyes_frown'}
-        if allow_single_mesh_noop and not candidates.intersection(mesh_names):
+        # Configured native names replace the constructor defaults. When every
+        # exact lookup misses, show/hide leaves the RK's initial visibility intact.
+        if not native_names.intersection(mesh_names):
             return set(), set(), {'field': source,
                                   'groups': {k: sorted(v) for k, v in groups.items()},
-                                  'lookup_candidates': sorted(candidates),
-                                  'rule': 'reviewed-single-mesh-eye-lookups-no-op'}
+                                  'resolved_native_controller': native_groups,
+                                  'rule': 'reviewed-native-eye-lookups-no-op'}
         _fail('missing_open_eye_mesh', 'No declared Open eye mesh exists in this RK')
     controlled = set().union(*groups.values()).intersection(mesh_names)
     provenance = {'field': source, 'groups': {k: sorted(v) for k, v in groups.items()}}
@@ -166,12 +165,6 @@ def _eyes(obj: GameObject, game_objects: GameObjectData, mesh_names: set[str], *
     # then replaces the first literal 'lod0' with 'lod1'. Only add its initial
     # hide operations when the entire controller resolves exactly and its Open
     # agrees with this static preview's single declared Open mesh.
-    native_groups = {
-        state: (data.get('EyeSubObject_' + state, [''])[0]
-                if data.get('EyeSubObject_' + state) else '').replace('lod0', 'lod1', 1)
-        for state in groups
-    }
-    native_names = set(native_groups.values())
     if (len(native_names) == 4 and '' not in native_names
             and native_names <= mesh_names and opened == {native_groups['Open']}):
         added_hidden = native_names - controlled - opened
@@ -261,8 +254,7 @@ def _select_world_view(category: str, obj: GameObject, game_objects: GameObjectD
                 event_rule = 'reviewed-world-actor-pony_type01-default'
         provenance['events'] = {'file': None,
                                 'rule': event_rule, **event_source}
-        opened, controlled, provenance['eyes'] = _eyes(obj, game_objects, set(mesh_names),
-            allow_single_mesh_noop=wardrobe is None and len(mesh_names) == 1)
+        opened, controlled, provenance['eyes'] = _eyes(obj, game_objects, set(mesh_names))
         visible = set(mesh_names) - controlled | opened
         if wardrobe:
             wardrobe_meshes = set(wardrobe['mesh_visibility'])
@@ -335,8 +327,13 @@ def _select_world_view(category: str, obj: GameObject, game_objects: GameObjectD
     path, defaults, eventful, absent_hidden = None, {}, set(), []
     if category == 'Pony' and not events_absent:
         path = _event_file(Path(extracted_dir), event_stem, event_files=event_files)
-        defaults, eventful, absent_hidden = _events(path, model_stem, set(mesh_names))
-        provenance['events'].update(file=path.name)
+        if path is None:
+            events_absent = True
+            provenance['events'].update(requested_file=event_stem + '.xml',
+                                        source='missing-input-native-empty-controller')
+        else:
+            defaults, eventful, absent_hidden = _events(path, model_stem, set(mesh_names))
+            provenance['events'].update(file=path.name)
     if wardrobe and set(wardrobe['mesh_visibility']).intersection(defaults):
         _fail('wardrobe_subobject_order_unverified', 'Wardrobe meshes also have SubObject defaults')
     if controlled.intersection(defaults):
@@ -390,7 +387,7 @@ def _ponybook_view(world: dict, *, obj: GameObject, game_objects: GameObjectData
     """
     animation = obj.get('Animation') or {}
     path = _event_file(Path(extracted_dir), animation.get('Rig_MediumLOD'),
-                       event_files=event_files, allow_missing=True)
+                       event_files=event_files)
     defaults, eventful, absent_hidden = ({}, set(), []) if path is None else _events(path, model_stem, set(mesh_names))
     # Reuse Luna's ordered fields; native config consumes Item zero, then
     # changes only the first literal lod0 to lod1. A later Item is not a fallback.

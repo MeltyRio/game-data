@@ -42,6 +42,7 @@ class Pipeline(unittest.TestCase):
         self.transformer.gameObjectData = self.objects
         self.game_data = SimpleNamespace(game_objects=SimpleNamespace(**{name:SimpleNamespace(objects={name+'_id':SimpleNamespace(tags=[])}) for name in ('pony','pet','costume')}))
         self.transformer.game_data = self.game_data
+        self.game_data.game_objects.costume.objects['costume_id'].pony = 'pony_id'
         self.transformer.defaultGameCampaign = {'game_object_data':{}}
         folder=self.root/'raw/extracted'
         folder.mkdir(parents=True)
@@ -67,7 +68,8 @@ class Pipeline(unittest.TestCase):
         self.assertTrue(self.run_build(['download','extract']))
         self.writer.assert_called_once_with(self.objects,self.root/'raw/extracted',self.root/'dist',
             self.root/'raw/model-associations.json',campaign=self.transformer.defaultGameCampaign,
-            public_identities={'pony_id','pet_id','costume_id'}, failed_rkms=set(), animation_cache=ANY)
+            public_identities={'pony_id','pet_id','costume_id'}, outfit_owners={'costume_id': 'pony_id'},
+            failed_rkms=set(), animation_cache=ANY)
         self.globals['GameObjectData'].assert_not_called()
         self.transformer.start.assert_called_once()
         self.transformer.save.assert_called_once()
@@ -79,8 +81,8 @@ class Pipeline(unittest.TestCase):
     def test_npc_tags_allow_models_without_changing_page_data(self):
         for name in ('pony', 'pet', 'costume'):
             objects = getattr(self.game_data.game_objects, name).objects
-            objects[name+'_npc'] = SimpleNamespace(tags=['quest', 'npc'])
-            objects[name+'_other_tags'] = SimpleNamespace(tags=['unused', 'quest'])
+            objects[name+'_npc'] = SimpleNamespace(tags=['quest', 'npc'], pony='')
+            objects[name+'_other_tags'] = SimpleNamespace(tags=['unused', 'quest'], pony='')
         self.game_data.game_objects.pony.objects['Pony_NPC_Like_Name'] = SimpleNamespace(tags=[])
         before = deepcopy(self.game_data)
         expected = {'Pony_NPC_Like_Name', 'pony_id', 'pet_id', 'costume_id',

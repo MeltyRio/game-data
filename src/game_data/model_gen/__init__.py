@@ -1,5 +1,5 @@
 """Generate the optional 3D catalogue inside the existing game-data build."""
-from collections.abc import Collection, Iterable
+from collections.abc import Collection, Iterable, Mapping
 from functools import lru_cache
 import json
 from pathlib import Path
@@ -17,9 +17,9 @@ from ..model_catalogue import compact_animations
 from ..model_paths import asset_digest, is_asset_path, model_path
 from .converter import ConversionError
 from .converter.export import AssetBundle, convert_native
-from .converter.native import NativeInputError, load_model, material_dependency_names
+from .converter.native import NativeInputError, load_model, material_dependency_names, read_model_mesh_names
 from .selection import SelectionError, index_event_files, select_native_view
-from .interactions import InteractionError, prepare_interactions
+from .interactions import InteractionError, prepare_interactions, resolve_eye_meshes
 from .native_emitter import load_native_emitter
 from .additional import prepare_additional_actor, attach_additional_actor
 from .wardrobe import WardrobeError, interactive_wardrobe
@@ -97,6 +97,7 @@ def _publish_local(stage: Path, dist: Path, catalogue: dict) -> None:
 def generate_models(native_objects: GameObjectData, extracted_dir: str | Path, dist_dir: str | Path,
                     report_path: str | Path, *, campaign: DefaultGameCampaignType,
                     public_identities: Collection[str] | None = None,
+                    outfit_owners: Mapping[str, str] | None = None,
                     display_profile: str = 'ponybook-preferred', failed_rkms: Iterable[str] = (),
                     animation_cache: AnimationCache | None = None,
                     cache_dir: str | Path | None = None, texture_cache_bytes: int = 512 * 1024**2) -> dict:
@@ -121,7 +122,7 @@ def generate_models(native_objects: GameObjectData, extracted_dir: str | Path, d
     texture_cache = TextureCache(cache_dir/'textures', max_bytes=texture_cache_bytes)
     started = perf_counter()
     with console.status('Discovering native 3D associations...'):
-        report = discover_associations(native_objects, folder)
+        report = discover_associations(native_objects, folder, outfit_owners=outfit_owners)
     discovery_seconds = perf_counter() - started
     report['purpose'] = 'native-association-and-generation'
     report['summary']['discovery_blockers'] = report['summary'].pop('blockers')
@@ -172,11 +173,17 @@ def generate_models(native_objects: GameObjectData, extracted_dir: str | Path, d
                 category = association['category']
                 source_complete = False
                 try:
+                    if (category == 'PonySet' and not association['references_resolved']
+                            and identity not in (outfit_owners or {})):
+                        _resolve_part_preview(association, report, folder)
                     if not association['references_resolved']:
                         raise SelectionError('unresolved_association', association.get('error', 'Native RK/ANIM/CSV references are unresolved'))
                     if _render_override(campaign, category, identity):
                         raise SelectionError('campaign_visual_override_unverified', 'Visual override merge rules require review')
-                    owner_id = association['owner'] if category == 'PonySet' else identity
+                    part_preview = 'preview_source' in association
+                    owner_id = identity
+                    if category == 'PonySet':
+                        owner_id = association['preview_source' if part_preview else 'owner']
                     selection_category = 'Pony' if category == 'PonySet' else category
                     if category == 'PonySet' and _render_override(campaign, selection_category, owner_id):
                         raise SelectionError('campaign_visual_override_unverified', 'Owner visual override requires review')
@@ -191,17 +198,20 @@ def generate_models(native_objects: GameObjectData, extracted_dir: str | Path, d
                         report, folder, additional_cache, animation_cache=animation_cache, texture_cache=texture_cache,
                         rk_model=child_model)
                     selection = select_native_view(selection_category, obj, native_objects,
-                        model_stem=association['declaration']['model'] if 'declaration' in association else Path(model_name).stem,
+                        model_stem=association['declaration']['model'],
                         mesh_names=list(dict.fromkeys(report['models'][model_name]['meshes'])),
-                        clips=report['csv_libraries'][association['csv']['file']]['clips'] if 'csv' in association else [],
-                        extracted_dir=folder, outfit_id=identity if category == 'PonySet' else None,
+                        clips=report['csv_libraries'][association['csv']['file']]['clips'],
+                        extracted_dir=folder, outfit_id=identity if category == 'PonySet' and not part_preview else None,
                         csv_first_name=report['csv_libraries'][association['csv']['file']].get('first_declared_name'),
                         csv_excluded_names=report['csv_libraries'][association['csv']['file']].get('excluded_clip_names'),
                         display_profile=display_profile, event_files=event_files,
                         **({'allow_additional_actor': True} if prepared_additional is not None else {}))
                     wardrobe = selection['provenance'].get('wardrobe') or {}
+                    part_ids = wardrobe.get('part_ids', [])
+                    if part_preview:
+                        part_ids = [*part_ids, *(part['id'] for part in association['parts'].values())]
                     for dependency_category, dependency_ids in [('PonySet', wardrobe.get('set_ids', [])),
-                                                                 ('PonyPart', wardrobe.get('part_ids', []))]:
+                                                                 ('PonyPart', part_ids)]:
                         if any(_render_override(campaign, dependency_category, dep) for dep in dependency_ids):
                             raise SelectionError('campaign_visual_override_unverified', 'Wardrobe dependency override requires review')
                     wardrobe_profile = None
@@ -237,6 +247,8 @@ def generate_models(native_objects: GameObjectData, extracted_dir: str | Path, d
                         # remain valid; never approve a failed optional controller.
                         selection['provenance']['interactions'] = {
                             'diagnostics': [{'code': 'interaction-profile-unavailable', 'reason': str(error)}]}
+                    if part_preview:
+                        _check_part_preview(association, selection, report['models'][model_name]['meshes'])
                     used_effects = {event['effect'] for rows in selection.get('animation_events', {}).values()
                                     for event in rows if event['type'] == 'Emitter'}
                     interaction_effects = {name: interaction_effects[name] for name in used_effects}
@@ -345,6 +357,7 @@ def generate_models(native_objects: GameObjectData, extracted_dir: str | Path, d
                     counts = report['generation']['display_profiles']
                     counts[profile] = counts.get(profile, 0) + 1
             report['generation']['status'] = 'validated-local-output'
+            report['summary']['references_resolved'] = sum(row['references_resolved'] for row in report['identities'].values())
             report['summary']['converted'] = report['generation']['converted']
             report['summary']['conversion_exclusions'] = len(report['generation']['excluded'])
             # Diagnostics must be writable before switching the catalogue.
@@ -355,3 +368,47 @@ def generate_models(native_objects: GameObjectData, extracted_dir: str | Path, d
             write_association_report(native_objects, folder, report_path, public_dir=dist, report=report)
             raise
     return report
+
+
+def _resolve_part_preview(association: dict, report: dict, folder: Path) -> None:
+    """Find a native scene for explicit parts without inventing wardrobe ownership."""
+    if association['owners'] or not association.get('parts') or report['set_graph_errors']:
+        return
+    meshes = {part['mesh'] for part in association['parts'].values()}
+    candidates = []
+    for identity, row in report['identities'].items():
+        if row['category'] != 'Pony':
+            continue
+        # A failed library cannot remove an otherwise matching scene from
+        # the uniqueness check. Reuse mesh metadata from normal conversion.
+        if 'declaration' not in row:
+            return
+        name = row.get('model', row['declaration']['model'] + '.rk')
+        model = report['models'].get(name)
+        if model is None or 'error' in model:
+            return
+        if 'meshes' not in model:
+            model['meshes'] = read_model_mesh_names(folder/name)
+        if meshes <= set(model['meshes']):
+            candidates.append(identity)
+    if len(candidates) != 1:
+        return
+    source = report['identities'][candidates[0]]
+    if not source['references_resolved'] or source.get('additional_actor'):
+        return
+    association.update(model=source['model'], animation=source['animation'],
+                       csv=dict(source['csv']), declaration=dict(source['declaration']),
+                       preview_source=candidates[0], preview_relation='standalone-parts-preview',
+                       references_resolved=True)
+    association.pop('error', None)
+
+
+def _check_part_preview(association: dict, selection: dict, mesh_names: list[str]) -> None:
+    parts = {part['mesh'] for part in association['parts'].values()}
+    eyes = resolve_eye_meshes(selection, mesh_names)
+    opened = {mesh_names[index] for index in eyes.get('Open', [])}
+    all_eyes = {mesh_names[index] for indices in eyes.values() for index in indices}
+    if parts & opened or set(selection['visible_meshes']) != parts | opened:
+        raise SelectionError('incomplete_part_preview', 'Native scene is not exactly the declared parts and resolved Open eyes')
+    if not set(selection.get('retained_meshes', selection['visible_meshes'])) <= parts | all_eyes:
+        raise SelectionError('incomplete_part_preview', 'Native actions require meshes beyond the declared parts and eyes')
