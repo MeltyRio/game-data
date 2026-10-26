@@ -493,9 +493,14 @@ support only covers the declared mesh visibility events above; it does not creat
 missing prop geometry or add task/scene controllers. AdditionalObject actors retain their previous independent strict
 controller and animation behavior; pets do not acquire PonyBook interactions.
 
-Open/Closed geometry must both exist, be distinct, and agree with the verified
-default eye mask before the consumer enables blinking. No eye geometry is
-invented. If optional interactive geometry or dependencies cannot convert, the
+The producer verifies that source Open/Closed groups both resolve, are distinct,
+and agree with the default eye mask, then records that `blink` capability in the
+model profile. Conversion projects eye targets onto retained geometry, accepting
+absent indices only when its zero-weight triangle pruning removed the entire
+primitive. A valid source state may therefore have an empty rendered group; its
+EyeSet events and blink timing remain meaningful, including hiding other groups
+and restoring the current expression. Missing source states and invalid indices
+remain errors. No eye geometry is invented. If optional interactive geometry or dependencies cannot convert, the
 normal generator retains its independently verified static model/event-free
 actions and records `interaction-assets-unavailable`; it publishes no interaction
 profile for that fallback. A failure of the original static conversion still

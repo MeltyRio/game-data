@@ -212,7 +212,7 @@ def prepare_interactions(selection: dict, category: str, obj: GameObject, *,
     profile = {'version': 1, 'clickAnimations': click_names}
     model_profile = {'version': 1}
     if all_eyes or any(event['type'] == 'EyeSet' for rows in events.values() for event in rows):
-        model_profile['eyes'] = eyes
+        model_profile.update(eyes=eyes, blink=blink)
     if subobjects:
         model_profile['subObjects'] = sorted(subobjects)
     result['clip_names'] = selected

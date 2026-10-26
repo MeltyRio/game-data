@@ -182,11 +182,14 @@ def _remove_collapsed_zero_weight_triangles(
         if collapsed.any():
             if materials[primitive["material"]]["resolved_shader"] != "rkshader":
                 raise NativeInputError("Zero-weight triangles require the reviewed ordinary shader")
-            removed.append({"selected_primitive_index": primitive_index,
-                            "mesh": primitive["name"],
-                            "triangle_ordinals": np.flatnonzero(collapsed).tolist(),
-                            "indices": primitive["indices"][collapsed].tolist(),
-                            "primitive_removed": bool(collapsed.all())})
+            removal = {"selected_primitive_index": primitive_index,
+                       "mesh": primitive["name"],
+                       "triangle_ordinals": np.flatnonzero(collapsed).tolist(),
+                       "indices": primitive["indices"][collapsed].tolist(),
+                       "primitive_removed": bool(collapsed.all())}
+            if "native_mesh_index" in primitive:
+                removal["native_mesh_index"] = primitive["native_mesh_index"]
+            removed.append(removal)
         if not collapsed.all():
             retained.append({**primitive, "indices": primitive["indices"][~collapsed]})
     if not retained:

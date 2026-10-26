@@ -149,19 +149,19 @@ def convert_native(rk_path: str | Path, anim_path: str | Path, csv_path: str | P
                 or set(animation_events or {}) - ids):
             raise NativeInputError('Invalid source-bound interaction animation identity')
         mesh_indices = {p['native_mesh_index'] for p in model.primitives}
-        if (set(model_interactions) - {'version', 'eyes', 'subObjects'} or type(model_interactions.get('version')) is not int
+        if (set(model_interactions) - {'version', 'eyes', 'subObjects', 'blink'} or type(model_interactions.get('version')) is not int
                 or model_interactions['version'] != 1):
             raise NativeInputError('Invalid model interaction profile')
         eyes = model_interactions.get('eyes')
-        if eyes is not None and (not isinstance(eyes, dict) or set(eyes) != {'Open', 'Closed', 'Happy', 'Frown'}
-                or any(not isinstance(values, list) or any(type(i) is not int or i not in mesh_indices for i in values)
-                       or len(values) != len(set(values)) for values in eyes.values())):
-            raise NativeInputError('Native eye index is absent from retained geometry')
+        if (eyes is None and 'blink' in model_interactions
+                or eyes is not None and type(model_interactions.get('blink')) is not bool):
+            raise NativeInputError('Invalid source blink capability')
+        projected_eyes = _project_eye_targets(eyes, native) if eyes is not None else None
         subobjects = model_interactions.get('subObjects', [])
         if (not isinstance(subobjects, list) or any(type(i) is not int or i not in mesh_indices for i in subobjects)
                 or len(subobjects) != len(set(subobjects))):
             raise NativeInputError('Native SubObject index is absent from retained geometry')
-        model.interactions = model_interactions
+        model.interactions = {**model_interactions, 'eyes': projected_eyes} if eyes is not None else model_interactions
         model.interaction_effects = interaction_effects
         for source_clip in native['clips']:
             events = (animation_events or {}).get(source_clip['name'], [])
@@ -240,3 +240,17 @@ def convert_native(rk_path: str | Path, anim_path: str | Path, csv_path: str | P
     version = (4 if "wardrobe" in row or any(clip.get("eventBinding") for clip in row["animations"]) or (model_interactions or {}).get("subObjects")
                else 3 if interactions is not None else 2 if native["provenance"].get("material_uv_clock") else 1)
     return AssetBundle({"schemaVersion": version, "models": {identity: row}}, files, native["provenance"])
+
+
+def _project_eye_targets(eyes: dict, native: dict) -> dict[str, list[int]]:
+    """Project verified source states onto geometry that survives conversion."""
+    retained = {primitive['native_mesh_index'] for primitive in native['primitives']}
+    removed = {row['native_mesh_index']
+               for row in native['provenance'].get('zero_weight_triangles', {}).get('removed', [])
+               if row['primitive_removed']}
+    if (not isinstance(eyes, dict) or set(eyes) != {'Open', 'Closed', 'Happy', 'Frown'}
+            or any(not isinstance(values, list)
+                   or any(type(index) is not int or index not in retained | removed for index in values)
+                   or len(values) != len(set(values)) for values in eyes.values())):
+        raise NativeInputError('Native eye index is absent from retained or proven collapsed geometry')
+    return {state: [index for index in indices if index in retained] for state, indices in eyes.items()}

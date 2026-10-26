@@ -1,6 +1,7 @@
 """Native material behavior from self-authored resources, without shader files."""
 from __future__ import annotations
 
+import copy
 import struct
 import tempfile
 import unittest
@@ -10,8 +11,9 @@ import numpy as np
 
 from game_data.model_gen.converter import from_native
 from game_data.model_gen.converter.export import convert_native
-from game_data.model_gen.converter.native import load_native
+from game_data.model_gen.converter.native import NativeInputError, load_native
 from converter.test_native_adapter import fixture
+from converter.test_converter import unpack
 
 
 def add_triangles(folder, *, separate=False, weight=0):
@@ -82,3 +84,50 @@ class ZeroWeightTriangleTests(unittest.TestCase):
         current = self.bundle()
         self.assertEqual(current.files, baseline.files)
         self.assertEqual(current.catalogue, baseline.catalogue)
+
+    def test_pruned_eye_targets_preserve_events_and_source_blink_capability(self):
+        add_triangles(self.folder, separate=True)
+        path = self.folder / 'tiny.xml'
+        path.write_text('<MeshList/><AnimationList><Animation Name="move">'
+            '<Frame Index="1"><EyeSet Open="Closed" EnableBlink="1"/></Frame>'
+            '<Frame Index="2"><EyeSet Open="Open" EnableBlink="1"/></Frame>'
+            '</Animation></AnimationList>')
+        profile = {'version': 1, 'blink': True,
+                   'eyes': {'Open': [0], 'Closed': [1], 'Happy': [], 'Frown': []}}
+        original = copy.deepcopy(profile)
+        events = [dict(frame=frame, type='EyeSet', state=state, enableBlink=True)
+                  for frame, state in [(1, 'Closed'), (2, 'Open')]]
+        options = dict(identity='SyntheticNative', **self.kwargs(),
+            retained_meshes=['body', 'degenerate'], model_interactions=profile,
+            interactions={'version': 1, 'clickAnimations': ['move']},
+            animation_events={'move': events}, event_approvals={path.resolve(): ['move']})
+        def convert(**changes):
+            return convert_native(self.folder / 'tiny.rk', self.folder / 'tiny.anim',
+                                  self.folder / 'tiny.csv', ['move'], **{**options, **changes})
+        bundle = convert()
+        row = bundle.catalogue['models']['SyntheticNative']
+        document, _ = unpack(bundle.files[row['path']])
+        self.assertEqual(document['extras']['atpInteractions']['eyes'],
+                         {'Open': [0], 'Closed': [], 'Happy': [], 'Frown': []})
+        self.assertTrue(document['extras']['atpInteractions']['blink'])
+        self.assertEqual([mesh['name'] for mesh in document['meshes']], ['body'])
+        binding = row['animations'][0]['eventBinding']
+        self.assertEqual(binding['events'], events)
+        self.assertEqual(binding['visibility'], [
+            {'meshName': 'body', 'times': [0, 1/15, 2/15], 'values': [True, False, True]}])
+        self.assertEqual(row['interactions']['clickAnimations'], ['move'])
+        self.assertEqual(profile, original, 'projection must not alter source-state evidence')
+        removed = bundle.provenance['zero_weight_triangles']['removed'][0]
+        self.assertEqual(removed['native_mesh_index'], 1)
+        self.assertTrue(removed['primitive_removed'])
+        for invalid in [99, True]:
+            bad = copy.deepcopy(profile)
+            bad['eyes']['Closed'] = [invalid]
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(NativeInputError, 'eye index'):
+                convert(model_interactions=bad)
+        with self.assertRaisesRegex(NativeInputError, 'eye index'):
+            convert(retained_meshes=['body'])
+        bad = copy.deepcopy(profile)
+        bad['eyes']['Closed'] = []
+        with self.assertRaisesRegex(NativeInputError, 'eye state is absent'):
+            convert(model_interactions=bad)

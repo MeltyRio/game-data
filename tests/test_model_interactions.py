@@ -123,6 +123,7 @@ class NativeControls(unittest.TestCase):
     def test_duplicate_native_eye_meshes_have_original_indices(self):
         result = self.run_selection()
         self.assertEqual(result['model_interactions']['eyes']['Closed'], [2, 3])
+        self.assertTrue(result['model_interactions']['blink'])
         self.assertEqual(result['interactions']['clickAnimations'], ['gen_tap_north'])
         self.assertIn('eyes_shut', result['retained_meshes'])
         self.assertNotIn('eyes_shut', result['visible_meshes'])
@@ -295,6 +296,7 @@ class NormalPipeline(unittest.TestCase):
         generate_models(self.objects, self.raw, self.dist, self.root/'report.json', campaign={})
         row = self.catalogue()['models']['Synthetic_Flag']
         doc = glb_json((self.dist/row['path']).read_bytes())
+        self.assertFalse(doc['extras']['atpInteractions']['blink'])
         self.assertEqual(doc['extras']['atpInteractions']['eyes'], {
             state: [] for state in ['Open','Closed','Happy','Frown']})
         wave = next(clip for clip in row['animations'] if clip['id'] == 'wave')
