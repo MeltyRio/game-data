@@ -77,14 +77,6 @@ def _clips(path: Path, frame_count: int) -> dict:
         raise AssociationError(str(error)) from error
 
 
-def _sets(pony: GameObject, sets: dict[str, GameObject]) -> list[str]:
-    from .model_gen.wardrobe import WardrobeError, registered_sets
-    try:
-        return registered_sets(pony, sets)
-    except WardrobeError as error:
-        raise AssociationError(str(error)) from error
-
-
 def _parts(outfit: GameObject, parts: dict[str, GameObject]) -> dict[str, dict[str, str]]:
     from .model_gen.wardrobe import WardrobeError, resolve_set_parts
     try:
@@ -102,6 +94,8 @@ def discover_associations(game_objects: GameObjectData, extracted_dir: str | Pat
     External library stem + .anim/.csv follows the inspected native loader;
     see docs/3d-resource-associations.md for evidence and version boundaries.
     """
+    from .model_gen.wardrobe import inspect_registered_sets
+
     folder = Path(extracted_dir)
     outfit_owners = outfit_owners or {}
     rows, model_cache, anim_cache, csv_cache = {}, {}, {}, {}
@@ -110,12 +104,6 @@ def discover_associations(game_objects: GameObjectData, extracted_dir: str | Pat
     ponies, pets = game_objects.get('Pony', {}), game_objects.get('PonyPet', {})
     sets, parts = game_objects.get('PonySet', {}), game_objects.get('PonyPart', {})
     owners, set_errors = {}, {}
-    for identity, pony in ponies.items():
-        try:
-            for outfit in _sets(pony, sets):
-                owners.setdefault(outfit, []).append(identity)
-        except AssociationError as error:
-            set_errors[identity] = str(error)
 
     def inspect(name: str, cache: dict[str, dict], reader: Callable[[Path], dict] | None = None) -> dict:
         if name not in cache:
@@ -176,6 +164,12 @@ def discover_associations(game_objects: GameObjectData, extracted_dir: str | Pat
             if identity in rows:
                 raise AssociationError('Identity reused across 3D categories: ' + identity)
             rows[identity] = row
+            if category == 'Pony':
+                row['sets'], set_error = inspect_registered_sets(obj, sets)
+                for outfit in row['sets']:
+                    owners.setdefault(outfit, []).append(identity)
+                if set_error is not None:
+                    set_errors[identity] = str(set_error)
             try:
                 if category == 'Pony':
                     model, anim = obj.get('Model', {}).get('MediumLOD'), obj.get('Animation', {}).get('Rig_MediumLOD')
@@ -185,7 +179,6 @@ def discover_associations(game_objects: GameObjectData, extracted_dir: str | Pat
                                    'context': 'conversation; viewer initial pose still requires validation'}
                     row['events'] = obj.get('Animation', {}).get('AnimationEventsXML')
                     row['eyes'] = obj.get('Eyes')  # None and explicit empty arrays are different.
-                    row['sets'] = _sets(obj, sets)
                     row['additional_object'] = obj.get('AdditionalObject')
                     additional = row['additional_object'] or {}
                     if additional.get('Model'):
@@ -198,11 +191,17 @@ def discover_associations(game_objects: GameObjectData, extracted_dir: str | Pat
                     row['fields'] = {'model': 'Object.Model', 'animation': 'Object.Animation'}
                     row['idle'] = {'field': 'Object.AnimationIdle', 'value': obj.get('Object', {}).get('AnimationIdle')}
                     row['events'] = None
-                model, anim = _stem(model), _stem(anim)
+                model = _stem(model)
+                # Keep the selected RK available to standalone-part candidate searches,
+                # even when this Pony's library or wardrobe registration is invalid.
+                row['model'] = DISPLAY_MODELS.get(identity, model) + '.rk'
+                inspect(row['model'], model_cache)
+                anim = _stem(anim)
                 row['declaration'] = {'model': model, 'animation': anim}
-                info = inspect(DISPLAY_MODELS.get(identity, model) + '.rk', model_cache)
+                if identity in set_errors:
+                    raise AssociationError(set_errors[identity])
                 library = inspect(anim + '.anim', anim_cache, _animation)
-                row['model'], row['animation'] = info['file'], library['file']
+                row['animation'] = library['file']
                 # The native loader appends .anim and .csv to the same caller
                 # stem. Embedded ANIM names are authoring metadata and can point
                 # to another library; never select that library as a fallback.
@@ -238,12 +237,13 @@ def discover_associations(game_objects: GameObjectData, extracted_dir: str | Pat
         rows[identity] = row
         try:
             row['parts'] = _parts(outfit, parts)
-            owner_id = outfit_owners.get(identity)
-            if owner_id is None and len(row['owners']) == 1:
-                owner_id = row['owners'][0]
-            if owner_id not in row['owners'] or set_errors:
-                # A malformed owner's set graph can conceal another owner.
+            owner_scope = {outfit_owners[identity]} if identity in outfit_owners else set(ponies)
+            if owner_scope.intersection(set_errors):
+                raise AssociationError('Incomplete native outfit registration in the requested owner scope')
+            candidates = owner_scope.intersection(row['owners'])
+            if len(candidates) != 1:
                 raise AssociationError('No verified native outfit owner for the requested context')
+            owner_id = candidates.pop()
             owner = rows[owner_id]
             if not owner['references_resolved']:
                 raise AssociationError('Outfit owner has unresolved resources')

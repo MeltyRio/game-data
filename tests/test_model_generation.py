@@ -453,6 +453,60 @@ class ModelGeneration(unittest.TestCase):
         self.assertEqual((self.dist/outfit['path']).read_bytes(), expected_bytes)
         self.assertEqual(models['Synthetic_Unrelated']['animations'], outfit['animations'])
 
+    def test_standalone_parts_scope_registration_errors_by_native_meshes(self):
+        from copy import deepcopy
+        self.prepare_standalone_parts()
+        original = deepcopy(self.objects)
+        data = bytearray((self.native/'flag.rk').read_bytes())
+        headers = [struct.unpack_from('<4I', data, 80 + index * 16) for index in range(24)]
+        _, offset, _, size = next(header for header in headers if header[0] == 16)
+        data[offset:offset + size] = b'other'.ljust(size, b'\0')
+        (self.native/'other.rk').write_bytes(data)
+        self.generate(public_identities={'Synthetic_Outfit'})
+        expected = self.assert_closed()['models']['Synthetic_Outfit']
+        expected_bytes = (self.dist/expected['path']).read_bytes()
+
+        for case in ('unrelated', 'matching', 'unknown_model', 'source',
+                     'registered_before', 'registered_after', 'registered_subset', 'registered_later_subset'):
+            with self.subTest(case=case):
+                self.objects = deepcopy(original)
+                broken = deepcopy(self.objects['Pony']['Synthetic_Unrelated'])
+                broken['Sets']['Sets'] = ['Missing_Set']
+                if case == 'source':
+                    self.objects['Pony']['Synthetic_Unrelated'] = broken
+                else:
+                    broken['Model']['MediumLOD'] = {
+                        'matching': 'flag', 'unknown_model': 'missing'}.get(case, 'other')
+                    if case == 'registered_before':
+                        broken['Sets']['Sets'] = ['Synthetic_Outfit', 'Missing_Set']
+                    elif case == 'registered_after':
+                        broken['Sets']['Sets'] = ['Missing_Set', 'Synthetic_Outfit']
+                    elif case in ('registered_subset', 'registered_later_subset'):
+                        broken['Sets']['Sets'] = ['Source_Set']
+                        children = ['Missing_Set', 'Synthetic_Outfit']
+                        if case == 'registered_later_subset':
+                            broken['Sets']['Sets'].insert(0, 'Missing_Set')
+                            children = ['Synthetic_Outfit']
+                        self.objects['PonySet']['Source_Set'] = {
+                            'Parts': {'Body': 'body0'}, 'PonySet': {'SubSets': children}}
+                    self.objects['Pony']['Synthetic_Broken'] = broken
+                if case == 'unrelated':
+                    report = self.generate(public_identities={'Synthetic_Outfit'})
+                    self.assertEqual(report['generation']['excluded'], {})
+                    self.assertEqual(self.assert_closed()['models']['Synthetic_Outfit'], expected)
+                    self.assertEqual((self.dist/expected['path']).read_bytes(), expected_bytes)
+                    row = report['identities']['Synthetic_Outfit']
+                    self.assertEqual(row['preview_source'], 'Synthetic_Unrelated')
+                    self.assertNotIn('owner', row)
+                else:
+                    with self.assertRaisesRegex(ValueError, 'No verified basic'):
+                        self.generate(public_identities={'Synthetic_Outfit'})
+                    report = json.loads(self.report.read_text())
+                    self.assertEqual(report['generation']['excluded']['Synthetic_Outfit']['code'],
+                                     'unresolved_association')
+                    if case.startswith('registered_'):
+                        self.assertEqual(report['identities']['Synthetic_Outfit']['owners'], ['Synthetic_Broken'])
+
     def test_standalone_parts_require_one_exact_complete_native_scene(self):
         from copy import deepcopy
         self.prepare_standalone_parts()

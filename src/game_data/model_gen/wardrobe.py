@@ -29,29 +29,46 @@ def _array(value: object, field: str) -> list[str]:
 
 
 def registered_sets(owner: GameObject, sets: dict[str, GameObject]) -> list[str]:
-    """Pony.Sets stops at its first empty item; each direct SubSets is retained.
+    result, error = inspect_registered_sets(owner, sets)
+    if error is not None:
+        raise error
+    return result
 
-    The native SubSets parser has no matching empty-item terminator. An empty
-    SubSets reference is therefore unresolved, not permission to skip entries.
+
+def inspect_registered_sets(owner: GameObject, sets: dict[str, GameObject]) -> tuple[list[str], WardrobeError | None]:
+    """Retain known direct registrations even when their dependencies are invalid.
+
+    Pony.Sets stops at its first empty item; direct SubSets does not. An error
+    leaves the graph unusable, but cannot erase an explicitly declared owner.
     """
-    result = []
-    for identity in _array(owner.get('Sets', {}).get('Sets', []), 'Sets.Sets'):
+    result, error = [], None
+    try:
+        roots = _array(owner.get('Sets', {}).get('Sets', []), 'Sets.Sets')
+    except WardrobeError as issue:
+        return result, issue
+    for identity in roots:
         if not identity:
             break
-        if identity not in sets:
-            _fail('missing_wardrobe_set', 'Missing PonySet: ' + identity)
-        children = _array(sets[identity].get('PonySet', {}).get('SubSets', []), 'PonySet.SubSets')
-        for child in children:
-            if child == identity:
-                _fail('cyclic_wardrobe_sets', 'Cyclic SubSets: ' + identity)
-            if not child or child not in sets:
-                _fail('missing_wardrobe_set', 'Missing SubSets reference: ' + repr(child))
-            if _array(sets[child].get('PonySet', {}).get('SubSets', []), 'PonySet.SubSets'):
-                _fail('nested_wardrobe_subsets_unverified', 'Nested SubSets requires native review: ' + child)
-        for sid in [identity, *children]:
-            if sid not in result:
-                result.append(sid)
-    return result
+        if identity not in result:
+            result.append(identity)
+        try:
+            if identity not in sets:
+                _fail('missing_wardrobe_set', 'Missing PonySet: ' + identity)
+            children = _array(sets[identity].get('PonySet', {}).get('SubSets', []), 'PonySet.SubSets')
+            for child in children:
+                if child and child not in result:
+                    result.append(child)
+            for child in children:
+                if child == identity:
+                    _fail('cyclic_wardrobe_sets', 'Cyclic SubSets: ' + identity)
+                if not child or child not in sets:
+                    _fail('missing_wardrobe_set', 'Missing SubSets reference: ' + repr(child))
+                if _array(sets[child].get('PonySet', {}).get('SubSets', []), 'PonySet.SubSets'):
+                    _fail('nested_wardrobe_subsets_unverified', 'Nested SubSets requires native review: ' + child)
+        except WardrobeError as issue:
+            if error is None:
+                error = issue
+    return result, error
 
 
 def resolve_set_parts(outfit: GameObject, parts: dict[str, GameObject]) -> tuple[dict[str, dict[str, str]], dict[str, dict[str, str]]]:

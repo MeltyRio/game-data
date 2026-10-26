@@ -118,6 +118,78 @@ class Associations(unittest.TestCase):
                     outfit_owners={'Set_Test': owner})
                 self.assertFalse(result['identities']['Set_Test']['references_resolved'])
 
+    def test_registration_errors_are_scoped_to_the_requested_owner(self):
+        self.add_outfit()
+        original = copy.deepcopy(self.objects)
+        for fault in ('missing', 'self', 'nested'):
+            with self.subTest(fault=fault):
+                self.objects = copy.deepcopy(original)
+                broken = pony()
+                broken['Sets']['Sets'] = ['Set_Broken']
+                self.objects['Pony']['Pony_Broken'] = broken
+                if fault != 'missing':
+                    self.objects['PonySet']['Set_Broken'] = {
+                        'PonySet': {'SubSets': ['Set_Broken' if fault == 'self' else 'Set_Child']}}
+                if fault == 'nested':
+                    self.objects['PonySet']['Set_Child'] = {'PonySet': {'SubSets': ['Set_Test']}}
+                result = audit.discover_associations(self.objects, self.folder,
+                    outfit_owners={'Set_Test': 'Pony_Test'})
+                row = result['identities']['Set_Test']
+                self.assertTrue(row['references_resolved'])
+                self.assertEqual(row['owner'], 'Pony_Test')
+                self.assertEqual(row['owners'], ['Pony_Test'])
+                self.assertEqual(set(result['set_graph_errors']), {'Pony_Broken'})
+                broken_row = result['identities']['Pony_Broken']
+                self.assertFalse(broken_row['references_resolved'])
+                self.assertEqual(broken_row['model'], 'flag.rk')
+
+                # Unknown registrations can still conceal an inferred owner.
+                self.assertFalse(self.run_audit()['identities']['Set_Test']['references_resolved'])
+                result = audit.discover_associations(self.objects, self.folder,
+                    outfit_owners={'Set_Test': 'Pony_Broken'})
+                self.assertFalse(result['identities']['Set_Test']['references_resolved'])
+
+    def test_registration_inspection_preserves_termination_order_and_strict_errors(self):
+        from game_data.model_gen.wardrobe import inspect_registered_sets, registered_sets, WardrobeError
+        self.add_outfit()
+        owner, sets = self.objects['Pony']['Pony_Test'], self.objects['PonySet']
+        sets['Set_Child'] = {'PonySet': {'SubSets': []}}
+        sets['Set_Test']['PonySet']['SubSets'] = ['Set_Child']
+        owner['Sets']['Sets'] = ['Set_Test', '', 'Missing_Later']
+        self.assertEqual(inspect_registered_sets(owner, sets), (['Set_Test', 'Set_Child'], None))
+        self.assertEqual(registered_sets(owner, sets), ['Set_Test', 'Set_Child'])
+
+        owner['Sets']['Sets'] = ['Set_Test', 'Missing_Later']
+        sets['Set_Test']['PonySet']['SubSets'] = ['', 'Set_Child']
+        declared, error = inspect_registered_sets(owner, sets)
+        self.assertEqual(declared, ['Set_Test', 'Set_Child', 'Missing_Later'])
+        self.assertEqual(error.code, 'missing_wardrobe_set')
+        self.assertEqual(str(error), "Missing SubSets reference: ''")
+        with self.assertRaises(WardrobeError) as caught:
+            registered_sets(owner, sets)
+        self.assertEqual((caught.exception.code, str(caught.exception)), (error.code, str(error)))
+
+    def test_explicit_owner_still_requires_target_dependencies(self):
+        self.add_outfit()
+        original = copy.deepcopy(self.objects)
+        for fault in ('owner_library', 'owner_registration', 'part', 'linked_part'):
+            with self.subTest(fault=fault):
+                self.objects = copy.deepcopy(original)
+                owner = self.objects['Pony']['Pony_Test']
+                if fault == 'owner_library':
+                    owner['Animation']['Rig_MediumLOD'] = 'missing'
+                elif fault == 'owner_registration':
+                    owner['Sets']['Sets'].append('Set_Missing')
+                elif fault == 'part':
+                    del self.objects['PonyPart']['Part_Body']
+                else:
+                    del self.objects['PonyPart']['Part_Tail']
+                result = audit.discover_associations(self.objects, self.folder,
+                    outfit_owners={'Set_Test': 'Pony_Test'})
+                row = result['identities']['Set_Test']
+                self.assertFalse(row['references_resolved'])
+                self.assertIn('error', row)
+
     def test_public_owner_does_not_create_an_unregistered_outfit_relationship(self):
         self.add_outfit()
         self.objects['Pony']['Pony_Test']['Sets']['Sets'] = []

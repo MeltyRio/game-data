@@ -180,8 +180,12 @@ This also permits a declared empty-tail part to hide other registered tails.
 The normal build supplies the existing public `costume.pony` page context. It
 must be one of the owners explicitly registering the set through `Sets.Sets` or
 `SubSets`; it cannot create a missing native relationship. Without a supplied
-context, ownership must be unique. All registered owners remain in diagnostics;
-the selected owner's eyes, default parts and animation context stay independent.
+context, ownership must be unique. Registration errors are scoped to the
+requested owner; inferred ownership requires complete registrations across all
+possible owners. All registered owners remain in diagnostics; the selected
+owner's eyes, default parts and animation context stay independent. Known direct
+registrations remain in diagnostics even when validation fails; a broken
+registration cannot turn a registered outfit into an ownerless preview.
 Unknown ownership is never filled by name matching or quest-clone preference.
 An ATP outfit entry represents a complete outfit preview, not saved player
 mixed equipment or an interactive wardrobe.
@@ -190,8 +194,11 @@ For an unregistered set with no supplied page owner, a standalone parts preview
 can use a unique existing native Pony scene containing every expanded
 `PonyPart.ModelName`. Matching uses parsed RK mesh names, including all native
 Pony contexts independently of the requested public identities or animation
-conversion success. Normal generation reuses its already read mesh metadata;
-a costume-only build reads missing metadata with the existing RK loader.
+conversion success. A registration error cannot exclude a matching scene from
+this uniqueness check or invalidate a known nonmatching scene. Unknown model
+or mesh evidence leaves the candidate search incomplete and prevents a preview.
+Normal generation reuses its already read mesh metadata; a costume-only build
+reads missing metadata with the existing RK loader.
 The scene retains its own verified model, materials, eyes, pose and library.
 Default visible meshes must be exactly the declared parts plus resolved Open
 eyes; retained animation meshes may add only the other resolved eye states.

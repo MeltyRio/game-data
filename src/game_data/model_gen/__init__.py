@@ -372,18 +372,18 @@ def generate_models(native_objects: GameObjectData, extracted_dir: str | Path, d
 
 def _resolve_part_preview(association: dict, report: dict, folder: Path) -> None:
     """Find a native scene for explicit parts without inventing wardrobe ownership."""
-    if association['owners'] or not association.get('parts') or report['set_graph_errors']:
+    if association['owners'] or not association.get('parts'):
         return
     meshes = {part['mesh'] for part in association['parts'].values()}
     candidates = []
     for identity, row in report['identities'].items():
         if row['category'] != 'Pony':
             continue
-        # A failed library cannot remove an otherwise matching scene from
-        # the uniqueness check. Reuse mesh metadata from normal conversion.
-        if 'declaration' not in row:
+        # Invalid dependencies cannot remove a matching scene from the
+        # uniqueness check. Only known, nonmatching geometry excludes a Pony.
+        if 'model' not in row:
             return
-        name = row.get('model', row['declaration']['model'] + '.rk')
+        name = row['model']
         model = report['models'].get(name)
         if model is None or 'error' in model:
             return
