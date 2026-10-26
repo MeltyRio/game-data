@@ -52,23 +52,11 @@ def _file(folder: Path, name: str, name_index: dict[str, list[str]]) -> Path:
 
 
 def _animation(path: Path) -> dict:
-    # Reuse Luna's header schema without decoding frames during discovery.
-    # Frame conversion remains a separate gate.
-    import dataclasses_struct as dcs
-    from luna_kit.model.anim import Header
-    size = dcs.get_struct_size(Header)
-    with path.open('rb') as stream:
-        raw = stream.read(size)
-    if len(raw) != size:
-        raise AssociationError('Truncated ANIM header')
-    header = Header.from_packed(raw)
-    strides = {0: 32, 1: 22, 4: 11}
-    if (header.magic != b'RKFORMAT' or (header.version_major, header.version_minor) != (5, 2)
-            or header.frame_type not in strides):
-        raise AssociationError('Unsupported ANIM header/layout')
-    if (not header.bone_count or not header.frame_count or
-            path.stat().st_size != size + header.bone_count * header.frame_count * strides[header.frame_type]):
-        raise AssociationError('ANIM byte length does not match its header')
+    from .model_gen.converter.native_animation import read_animation_header
+    try:
+        header = read_animation_header(path)
+    except ValueError as error:
+        raise AssociationError(str(error)) from error
     name = header.name.split(b'\0', 1)[0].decode('ascii').strip()
     _stem(name)
     return {'bone_count': header.bone_count, 'frame_count': header.frame_count,

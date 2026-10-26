@@ -40,16 +40,37 @@ class NativeBoundaryTests(unittest.TestCase):
                                                         b'self_created', 2, 2, kind)+b''.join(records))
 
 
-    def test_out_of_range_material_index_is_a_native_input_failure(self):
+    def test_invalid_mesh_references_are_native_input_failures(self):
         path = self.folder/'flag.rk'
-        raw = bytearray(path.read_bytes())
-        submeshes = next(offset for tag, offset, _, _ in
-                         struct.iter_unpack('<4I', raw[80:80 + 24 * 16]) if tag == 1)
-        # The fixture declares one material, so index one is the first invalid ID.
-        struct.pack_into('<I', raw, submeshes + 8, 1)
-        path.write_bytes(raw)
-        with self.assertRaisesRegex(NativeInputError, 'material index.*range'):
-            self.load(['wave'])
+        valid = path.read_bytes()
+        sections = {tag: (offset, count) for tag, offset, count, _ in
+                    struct.iter_unpack('<4I', valid[80:80 + 24 * 16])}
+        for position, kind, value, reason in [
+            (sections[1][0] + 8, '<I', sections[2][1], 'material index.*range'),
+            (sections[4][0], '<H', sections[3][1], 'face vertex index.*range'),
+        ]:
+            with self.subTest(reason=reason):
+                raw = bytearray(valid)
+                struct.pack_into(kind, raw, position, value)
+                path.write_bytes(raw)
+                with self.assertRaisesRegex(NativeInputError, reason):
+                    self.load(['wave'])
+
+    def test_converter_keeps_joint_and_nonempty_geometry_requirements(self):
+        path = self.folder/'flag.rk'
+        valid = path.read_bytes()
+        sections = {tag: (offset, count) for tag, offset, count, _ in
+                    struct.iter_unpack('<4I', valid[80:80 + 24 * 16])}
+        for position, kind, value, reason in [
+            (sections[17][0], '<B', sections[7][1], 'Invalid native joint'),
+            (sections[1][0], '<I', 0, 'empty native triangles'),
+        ]:
+            with self.subTest(reason=reason):
+                raw = bytearray(valid)
+                struct.pack_into(kind, raw, position, value)
+                path.write_bytes(raw)
+                with self.assertRaisesRegex(NativeInputError, reason):
+                    self.load(['wave'])
 
     def test_rk_is_opened_once_for_parsing_and_validation(self):
         path = self.folder/'flag.rk'

@@ -5,24 +5,15 @@ quaternion validity remain converter policy; binary decoding belongs to Luna.
 """
 from dataclasses import dataclass
 from pathlib import Path
-import struct
 from typing import TypedDict
+import dataclasses_struct as dcs
 import numpy as np
 from numpy.typing import NDArray
 from luna_kit.model import Anim
+from luna_kit.model.anim import Header
 
 NATIVE_POSITION_SCALE = 0.031250953674316406
-HEADER = struct.Struct('<8sII64sIII')
 RECORD_BYTES = {0: 32, 1: 22, 4: 11}
-
-
-@dataclass(frozen=True)
-class AnimationHeader:
-    major: int
-    minor: int
-    bone_count: int
-    frame_count: int
-    frame_type: int
 
 
 class NativeClip(TypedDict):
@@ -36,23 +27,26 @@ class NativeClip(TypedDict):
 
 @dataclass(frozen=True)
 class NativeAnimation:
-    header: AnimationHeader
+    header: Header
     translations: NDArray[np.float64]
     rotations_xyzw: NDArray[np.float64]
 
 
-def read_animation_header(path: str | Path) -> AnimationHeader:
+def read_animation_header(path: str | Path) -> Header:
     path = Path(path)
+    size = dcs.get_struct_size(Header)
     with path.open('rb') as handle:
-        raw = handle.read(HEADER.size)
-    if len(raw) != HEADER.size:
+        raw = handle.read(size)
+    if len(raw) != size:
         raise ValueError('Truncated animation header')
-    magic, major, minor, _name, bones, frames, kind = HEADER.unpack(raw)
-    if magic != b'RKFORMAT' or (major, minor) != (5, 2) or kind not in RECORD_BYTES:
+    header = Header.from_packed(raw)
+    major, minor, kind = header.version_major, header.version_minor, header.frame_type
+    if header.magic != b'RKFORMAT' or (major, minor) != (5, 2) or kind not in RECORD_BYTES:
         raise ValueError(f'Unsupported animation format: {major}.{minor} / type {kind}')
-    if not bones or not frames or path.stat().st_size != HEADER.size + bones * frames * RECORD_BYTES[kind]:
+    if (not header.bone_count or not header.frame_count or
+            path.stat().st_size != size + header.bone_count * header.frame_count * RECORD_BYTES[kind]):
         raise ValueError('Animation byte length does not match its declared frame layout')
-    return AnimationHeader(major, minor, bones, frames, kind)
+    return header
 
 
 def read_animation(path: str | Path) -> NativeAnimation:

@@ -5,7 +5,7 @@ import struct
 import tempfile
 import unittest
 import numpy as np
-from game_data.model_gen.converter.native_animation import read_animation
+from game_data.model_gen.converter.native_animation import read_animation, read_animation_header
 
 
 class AnimationFormatTests(unittest.TestCase):
@@ -16,6 +16,31 @@ class AnimationFormatTests(unittest.TestCase):
         self.temp.cleanup()
     def write(self, kind, records, *, frames=2, bones=1):
         self.path.write_bytes(struct.pack('<8sII64sIII', b'RKFORMAT', 5, 2, b'synthetic', bones, frames, kind) + records)
+    def test_header_exposes_native_metadata_without_decoding_frames(self):
+        self.write(0, struct.pack('<8f', 0, 0, 0, 1, math.nan, 0, 0, 1), frames=1)
+        header = read_animation_header(self.path)
+        self.assertEqual(getattr(header, 'name', None), b'synthetic'.ljust(64, b'\0'))
+        self.assertEqual((header.version_major, header.version_minor, header.bone_count,
+                          header.frame_count, header.frame_type), (5, 2, 1, 1, 0))
+        with self.assertRaisesRegex(ValueError, 'Non-finite'):
+            read_animation(self.path)
+    def test_both_readers_reject_unsupported_or_inconsistent_layouts(self):
+        self.write(4, struct.pack('<3hh3b', 0, 0, 0, 32767, 0, 0, 0), frames=1)
+        valid = self.path.read_bytes()
+        invalid = {'short_header': valid[:91], 'bad_magic': b'BROKEN!!' + valid[8:],
+                   'short_payload': valid[:-1], 'trailing_byte': valid + b'\0'}
+        for label, offset, value in [('major', 8, 6), ('minor', 12, 3), ('no_bones', 80, 0),
+                                     ('no_frames', 84, 0), ('unknown_type', 88, 99)]:
+            raw = bytearray(valid)
+            struct.pack_into('<I', raw, offset, value)
+            invalid[label] = raw[:92] if label in ('no_bones', 'no_frames') else raw
+        invalid['type2'] = valid[:88] + struct.pack('<I7h', 2, 0, 0, 0, 32767, 0, 0, 0)
+        invalid['type3'] = valid[:88] + struct.pack('<I4f3b', 3, 0, 0, 0, 1, 0, 0, 0)
+        for label, raw in invalid.items():
+            self.path.write_bytes(raw)
+            for reader in (read_animation_header, read_animation):
+                with self.subTest(input=label, reader=reader.__name__), self.assertRaises(ValueError):
+                    reader(self.path)
     def test_float_type0_keeps_signed_position_rotation_and_frame_boundaries(self):
         s = math.sqrt(.5)
         self.write(0, struct.pack('<16f', 0, 0, s, s, -20, 8, 3, 1, 0, 1, 0, 0, 1000.25, -9.5, 6, 1))

@@ -1,6 +1,7 @@
 """Self-authored sources only; these tests do not download or publish assets."""
 import copy
 from pathlib import Path
+import struct
 import tempfile
 import unittest
 from native_fixture import write_fixture
@@ -45,6 +46,38 @@ class Associations(unittest.TestCase):
         row = self.run_audit()['identities']['Pet_Test']
         self.assertTrue(row['references_resolved'])
         self.assertEqual(row['fields']['animation'], 'Object.Animation')
+
+    def test_animation_metadata_discovery_does_not_decode_frames(self):
+        from game_data.model_gen.converter.native_animation import read_animation
+        path = self.folder / 'flag.anim'
+        raw = bytearray(path.read_bytes())
+        struct.pack_into('<f', raw, 92 + 16, float('nan'))
+        path.write_bytes(raw)
+        result = self.run_audit()
+        self.assertTrue(result['identities']['Pony_Test']['references_resolved'])
+        self.assertEqual(result['animation_libraries']['flag.anim'],
+                         {'file': 'flag.anim', 'bone_count': 2, 'frame_count': 46,
+                          'frame_type': 0, 'embedded_name': 'flag'})
+        with self.assertRaisesRegex(ValueError, 'Non-finite'):
+            read_animation(path)
+
+    def test_invalid_animation_headers_are_association_errors(self):
+        path = self.folder / 'flag.anim'
+        valid = path.read_bytes()
+        for raw in (valid[:91], b'BROKEN!!' + valid[8:], valid[:-1], valid + b'\0'):
+            with self.subTest(bytes=len(raw)):
+                path.write_bytes(raw)
+                with self.assertRaises(audit.AssociationError):
+                    audit._animation(path)
+                self.assertFalse(self.row()['references_resolved'])
+
+    def test_discovery_still_rejects_unsafe_or_non_ascii_embedded_names(self):
+        path = self.folder / 'flag.anim'
+        valid = path.read_bytes()
+        for name in (b'', b'../flag', b'flag\xff'):
+            with self.subTest(name=name):
+                path.write_bytes(valid[:16] + name.ljust(64, b'\0') + valid[80:])
+                self.assertFalse(self.row()['references_resolved'])
 
 
     def test_same_bone_count_candidate_not_used_for_missing_library(self):

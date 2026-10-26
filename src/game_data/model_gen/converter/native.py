@@ -353,7 +353,7 @@ def load_native(
         animation = animation_cache.read_animation(anim_path) if animation_cache is not None else read_animation(anim_path)
     except ValueError as error:
         raise NativeInputError(str(error)) from error
-    major, minor, frame_type = animation.header.major, animation.header.minor, animation.header.frame_type
+    major, minor, frame_type = animation.header.version_major, animation.header.version_minor, animation.header.frame_type
     frames = animation.header.frame_count
     model = rk_model if rk_model is not None else load_model(rk_path)
     if len(model.bones) != animation.header.bone_count:
@@ -409,8 +409,6 @@ def load_native(
     texcoords = np.array([[vert.u, vert.v] for vert in model.verts], dtype=np.float64)
     joints = np.array([[item.bone for item in vert.bones] for vert in model.verts], dtype=np.int64)
     weights = np.array([[item.weight for item in vert.bones] for vert in model.verts], dtype=np.float64)
-    if joints.shape != (len(positions), 4) or weights.shape != joints.shape:
-        raise NativeInputError("Only native four-influence skinning is supported")
     if not np.isfinite(positions).all() or not np.isfinite(texcoords).all() or not np.isfinite(weights).all():
         raise NativeInputError("Non-finite native vertex data")
     if (weights < 0).any() or ((joints < 0) | (joints >= len(model.bones))).any():
@@ -425,8 +423,6 @@ def load_native(
     for native_mesh_index, mesh in enumerate(model.meshes):
         if native_mesh_index not in retained_indices:
             continue
-        if not (0 <= mesh.material_index < len(model.materials)):
-            raise NativeInputError(f"Invalid material on submesh {mesh.name}")
         if mesh.material_index not in material_ids:
             material = model.materials[mesh.material_index]
             rkm_path = _material_sibling(rk_path.parent, material.name, allow_missing=True)
@@ -522,10 +518,8 @@ def load_native(
                     materials[-1]["native_hair_clock_source"] = first_material
             dependencies.extend(([rkm_path] if has_rkm else []) + texture_dependencies)
         triangles = np.array([[tri.x, tri.y, tri.z] for tri in mesh.triangles], dtype=np.int64)
-        if triangles.ndim != 2 or triangles.shape[1] != 3 or not len(triangles):
+        if not len(triangles):
             raise NativeInputError(f"Invalid or empty native triangles: {mesh.name}")
-        if triangles.min() < 0 or triangles.max() >= len(positions):
-            raise NativeInputError(f"Native face index out of range: {mesh.name}")
         primitive = {"name": mesh.name, "indices": triangles, "material": material_ids[mesh.material_index]}
         if retained_meshes is not None:
             primitive.update(native_mesh_index=native_mesh_index, default_visible=mesh.name in visible)
