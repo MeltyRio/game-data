@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from bootstrap import ROOT
 from native_fixture import write_fixture, write_native_tables
-from game_data.model_gen.interactions import prepare_interactions
+from game_data.model_gen.interactions import InteractionError, prepare_interactions
 from game_data.model_gen.selection import select_native_view
 from game_data.model_gen import generate_models
 from game_data.model_gen.converter.native import NativeInputError, _verify_event_source
@@ -180,6 +180,57 @@ class NativeControls(unittest.TestCase):
                                                model_stem='body', mesh_names=self.names)
         self.assertEqual(reads.call_count, 1)
         self.assertEqual(verified['approved_events']['wave'], result['animation_events']['wave'])
+
+    def test_verified_events_merge_declarations_and_bound_targets_in_source_order(self):
+        self.names += ['hat', 'hat']
+        self.path.write_text('<MeshList><body>'
+            '<SubObject ID="prop" Name="hat" DefaultVisible="0"/>'
+            '<SubObject ID="alias" Name="hat" DefaultVisible="0"/>'
+            '</body></MeshList><AnimationList><Animation Name="wave">'
+            '<Frame Index="3"><EyeSet Open="None" EnableBlink="0"/></Frame>'
+            '<Frame Index="0"><SubObject ID="prop" Show="1"/></Frame>'
+            '</Animation><Animation Name="wave">'
+            '<Frame Index="3"><EyeSet Open="None" EnableBlink="0"/></Frame>'
+            '<Frame Index="0"><SubObject ID="alias" Show="1"/></Frame>'
+            '<Frame Index="1"><Emitter Particle="mlp_arena_pony_defeat_02"/></Frame>'
+            '</Animation><Animation Name="rest"/></AnimationList>')
+        verified, path = _verify_event_source(self.path, False, {'wave', 'rest'},
+            {self.path.resolve(): ['wave']}, model_stem='body', mesh_names=self.names)
+        self.assertEqual(path, self.path.resolve())
+        self.assertEqual(verified['approved_events'], {
+            'wave': [
+                {'frame': 3, 'type': 'EyeSet', 'state': 'None', 'enableBlink': False},
+                {'frame': 0, 'type': 'SubObject', 'meshes': [6, 7], 'visible': True},
+                {'frame': 1, 'type': 'Emitter', 'effect': 'mlp_arena_pony_defeat_02'}],
+            'rest': []})
+
+    def test_event_verification_preserves_approval_structure_and_support_boundaries(self):
+        eye = '<EyeSet Open="Closed" EnableBlink="1"/>'
+        frame = '<Frame Index="1">' + eye + '</Frame>'
+        cases = [
+            (frame, None, NativeInputError, 'requires unsupported native events'),
+            (frame, [], NativeInputError, 'requires unsupported native events'),
+            ('<Frame Index="0"/>', [], NativeInputError, 'requires unsupported native events'),
+            ('<Frame Index="-1">' + eye + '</Frame>', ['wave'], InteractionError, 'frame'),
+            ('<Frame Index="1">' + eye * 2 + '</Frame>', ['wave'], InteractionError, 'Duplicate'),
+            ('<Frame Index="1"><EyeSet><Nested/></EyeSet></Frame>', ['wave'], InteractionError, 'event'),
+            ('<Frame Index="1"><Sound Name="test"/></Frame>', ['wave'], NativeInputError, 'Unsupported approved'),
+            ('<Frame Index="1"><EyeSet Open="Missing" EnableBlink="1"/></Frame>', ['wave'], NativeInputError, 'Unsupported approved'),
+            ('<Frame Index="1"><Emitter Particle="missing"/></Frame>', ['wave'], NativeInputError, 'Unsupported approved'),
+        ]
+        for frames, approved, error, message in cases:
+            with self.subTest(frames=frames, approved=approved):
+                self.xml(frames)
+                approvals = None if approved is None else {self.path.resolve(): approved}
+                with self.assertRaisesRegex(error, message):
+                    _verify_event_source(self.path, False, {'wave'}, approvals)
+
+    def test_unselected_events_do_not_require_approval_or_supported_structure(self):
+        self.xml('<Frame Index="invalid"><Sound Name="test"/></Frame>')
+        verified, path = _verify_event_source(self.path, False, {'rest'})
+        self.assertEqual(verified, {'status': 'parsed-source-xml', 'name': 'rig.xml',
+                                    'checked_clips': ['rest']})
+        self.assertEqual(path, self.path.resolve())
 
     def test_subobject_missing_model_id_mesh_or_conflicting_event_excludes_whole_clip(self):
         self.names += ['hat']

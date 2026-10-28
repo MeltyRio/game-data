@@ -58,7 +58,6 @@ def _animation(path: Path) -> dict:
     except ValueError as error:
         raise AssociationError(str(error)) from error
     name = header.name.split(b'\0', 1)[0].decode('ascii').strip()
-    _stem(name)
     return {'bone_count': header.bone_count, 'frame_count': header.frame_count,
             'frame_type': header.frame_type, 'embedded_name': name}
 

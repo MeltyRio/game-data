@@ -71,13 +71,32 @@ class Associations(unittest.TestCase):
                     audit._animation(path)
                 self.assertFalse(self.row()['references_resolved'])
 
-    def test_discovery_still_rejects_unsafe_or_non_ascii_embedded_names(self):
+    def test_embedded_names_are_metadata_not_resource_stems(self):
         path = self.folder / 'flag.anim'
         valid = path.read_bytes()
-        for name in (b'', b'../flag', b'flag\xff'):
+        for name in (b'', b'art/flag', b'../flag'):
             with self.subTest(name=name):
                 path.write_bytes(valid[:16] + name.ljust(64, b'\0') + valid[80:])
-                self.assertFalse(self.row()['references_resolved'])
+                row = self.row()
+                self.assertTrue(row['references_resolved'])
+                self.assertEqual(row['csv']['file'], 'flag.csv')
+                self.assertEqual(row['csv_source']['embedded_name'], name.decode('ascii'))
+
+    def test_discovery_still_rejects_non_ascii_embedded_names(self):
+        path = self.folder / 'flag.anim'
+        valid = path.read_bytes()
+        path.write_bytes(valid[:16] + b'flag\xff'.ljust(64, b'\0') + valid[80:])
+        self.assertFalse(self.row()['references_resolved'])
+
+    def test_discovery_still_rejects_unsafe_declared_resource_stems(self):
+        for field, prop in (('Model', 'MediumLOD'), ('Animation', 'Rig_MediumLOD')):
+            for name in ('', 'art/flag', '../flag'):
+                with self.subTest(field=field, name=name):
+                    self.objects['Pony']['Pony_Test'] = pony()
+                    self.objects['Pony']['Pony_Test'][field][prop] = name
+                    row = self.row()
+                    self.assertFalse(row['references_resolved'])
+                    self.assertIn('Missing or unsafe native resource stem', row['error'])
 
 
     def test_same_bone_count_candidate_not_used_for_missing_library(self):

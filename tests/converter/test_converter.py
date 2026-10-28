@@ -2,6 +2,7 @@ import io
 import json
 import struct
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 from PIL import Image
@@ -86,6 +87,29 @@ class ConverterTest(unittest.TestCase):
         local = pose_matrices(lt, lq)
         local[:, 1] = local[:, 0] @ local[:, 1]
         np.testing.assert_allclose(local, global_, atol=1e-7)
+
+
+    def test_batched_pose_roundtrip_at_half_turns(self):
+        near_half = np.pi / 2 - 1e-8
+        q = np.array([[[0, 0, 0, 1], [1, 0, 0, 0]],
+                      [[0, np.sin(near_half), 0, np.cos(near_half)], [0, 0, 1, 0]],
+                      [[-.2, .3, -.4, -.8], [1, 0, 0, 0]],
+                      [[0, 0, 0, 1], [0, 1, 0, 0]]])
+        t = np.arange(24).reshape(4, 2, 3)
+        global_ = pose_matrices(t, q)
+        original = global_.copy()
+        with patch('numpy.linalg.eigh', wraps=np.linalg.eigh) as eigensolver:
+            lt, lq = local_trs(global_, [-1, 0])
+        eigensolver.assert_called_once()
+        matrices = eigensolver.call_args.args[0]
+        self.assertEqual(matrices.shape[-2:], (4, 4))
+        self.assertEqual(np.prod(matrices.shape[:-2]), 8)
+        self.assertTrue(np.all(lq[..., 3] >= 0))
+        np.testing.assert_allclose(np.linalg.norm(lq, axis=-1), 1, atol=1e-12)
+        local = pose_matrices(lt, lq)
+        local[:, 1] = local[:, 0] @ local[:, 1]
+        np.testing.assert_allclose(local, global_, atol=1e-12)
+        np.testing.assert_array_equal(global_, original)
 
 
 if __name__ == '__main__':

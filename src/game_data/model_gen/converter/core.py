@@ -98,18 +98,23 @@ def local_trs(globals_: ArrayLike, parents: Sequence[int]) -> tuple[NDArray[np.f
     rotations = result[..., :3, :3]
     require(np.allclose(np.swapaxes(rotations, -1, -2) @ rotations, np.eye(3), atol=2e-5)
             and np.allclose(np.linalg.det(rotations), 1, atol=2e-5), 'Pose has scale, reflection or shear; unsupported in this prototype')
-    quaternions = []
-    for r in rotations.reshape(-1, 3, 3):
-        # Symmetric Davenport matrix; largest eigenvector is XYZW quaternion.
-        qmat = np.array([[r[0,0]-r[1,1]-r[2,2], r[0,1]+r[1,0], r[0,2]+r[2,0], r[2,1]-r[1,2]],
-                         [r[0,1]+r[1,0], r[1,1]-r[0,0]-r[2,2], r[1,2]+r[2,1], r[0,2]-r[2,0]],
-                         [r[0,2]+r[2,0], r[1,2]+r[2,1], r[2,2]-r[0,0]-r[1,1], r[1,0]-r[0,1]],
-                         [r[2,1]-r[1,2], r[0,2]-r[2,0], r[1,0]-r[0,1], np.trace(r)]]) / 3
-        _, vectors = np.linalg.eigh(qmat)
-        q = vectors[:, -1]
-        if q[3] < 0: q = -q
-        quaternions.append(q)
-    q = np.asarray(quaternions).reshape((*rotations.shape[:-2], 4))
+    # Symmetric Davenport matrices; largest eigenvectors are XYZW quaternions.
+    r = rotations
+    qmat = np.empty((*r.shape[:-2], 4, 4))
+    qmat[..., 0, 0] = r[..., 0, 0]-r[..., 1, 1]-r[..., 2, 2]
+    qmat[..., 0, 1] = qmat[..., 1, 0] = r[..., 0, 1]+r[..., 1, 0]
+    qmat[..., 0, 2] = qmat[..., 2, 0] = r[..., 0, 2]+r[..., 2, 0]
+    qmat[..., 0, 3] = qmat[..., 3, 0] = r[..., 2, 1]-r[..., 1, 2]
+    qmat[..., 1, 1] = r[..., 1, 1]-r[..., 0, 0]-r[..., 2, 2]
+    qmat[..., 1, 2] = qmat[..., 2, 1] = r[..., 1, 2]+r[..., 2, 1]
+    qmat[..., 1, 3] = qmat[..., 3, 1] = r[..., 0, 2]-r[..., 2, 0]
+    qmat[..., 2, 2] = r[..., 2, 2]-r[..., 0, 0]-r[..., 1, 1]
+    qmat[..., 2, 3] = qmat[..., 3, 2] = r[..., 1, 0]-r[..., 0, 1]
+    qmat[..., 3, 3] = np.trace(r, axis1=-2, axis2=-1)
+    qmat /= 3
+    _, vectors = np.linalg.eigh(qmat)
+    q = vectors[..., -1].copy()
+    q[q[..., 3] < 0] *= -1
     t = result[..., :3, 3]
     return t, q
 

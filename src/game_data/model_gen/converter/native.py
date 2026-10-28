@@ -241,7 +241,7 @@ def _verify_event_source(event_path: str | Path | None, events_absent: bool, nam
             raise NativeInputError("Unsupported native animation declaration")
     from ..interactions import parse_events
     from ..visibility import compile_subobject_event
-    controls = parse_events(root)['controls'] if event_approvals is not None else {}
+    parsed = parse_events(root) if event_approvals is not None else None
     approved = (event_approvals or {}).get(path, [])
     for node in root.iter("Animation"):
         if node.get("Name") in names and set(node.attrib) != {"Name"}:
@@ -249,44 +249,36 @@ def _verify_event_source(event_path: str | Path | None, events_absent: bool, nam
         if node.get("Name") in names and len(node):
             if node.get('Name') not in approved:
                 raise NativeInputError(f"Selected animation requires unsupported native events: {node.get('Name')}")
-            declaration_events = []
-            for frame in node:
-                if frame.tag != 'Frame' or set(frame.attrib) != {'Index'} or not re.fullmatch(r'\d+', frame.get('Index', '')):
-                    raise NativeInputError('Unsupported approved native event frame')
-                for event in frame:
-                    attrs = event.attrib
-                    valid = (event.tag == 'EyeSet' and set(attrs) == {'Open', 'EnableBlink'}
-                             and attrs['Open'] in {'Open', 'Closed', 'Happy', 'Frown', 'None'}
-                             and attrs['EnableBlink'] in {'0', '1'}) or (
-                             event.tag == 'Emitter' and set(attrs) == {'Particle'}
-                             and attrs['Particle'] == 'mlp_arena_pony_defeat_02') or (
-                             event.tag == 'SubObject' and set(attrs) == {'ID', 'Show'}
-                             and attrs['Show'] in {'0', '1'})
-                    if not valid or len(event) or (event.text or '').strip():
-                        raise NativeInputError('Unsupported approved native event: ' + event.tag)
-                    key = (int(frame.get('Index')), event.tag, dict(attrs))
-                    if key in declaration_events:
-                        raise NativeInputError('Duplicate native event in one animation declaration')
-                    declaration_events.append(key)
     evidence = {"status": "parsed-source-xml", "name": path.name,
                 "checked_clips": sorted(names)}
     if event_approvals is not None:
+        selected_events = {name: events for name, events in parsed['animations'].items() if name in names}
+        for events in selected_events.values():
+            for event in events:
+                kind, attrs = event['type'], event['attributes']
+                valid = (kind == 'EyeSet' and set(attrs) == {'Open', 'EnableBlink'}
+                         and attrs['Open'] in {'Open', 'Closed', 'Happy', 'Frown', 'None'}
+                         and attrs['EnableBlink'] in {'0', '1'}) or (
+                         kind == 'Emitter' and set(attrs) == {'Particle'}
+                         and attrs['Particle'] == 'mlp_arena_pony_defeat_02') or (
+                         kind == 'SubObject' and set(attrs) == {'ID', 'Show'}
+                         and attrs['Show'] in {'0', '1'})
+                if not valid:
+                    raise NativeInputError('Unsupported approved native event: ' + kind)
         mapped = {}
-        for node in root.iter('Animation'):
-            if node.get('Name') not in names:
-                continue
-            rows = mapped.setdefault(node.get('Name'), [])
-            for frame in node:
-                for event in frame:
-                    row = {'frame': int(frame.get('Index')), 'type': event.tag}
-                    if event.tag == 'EyeSet':
-                        row.update(state=event.get('Open'), enableBlink=event.get('EnableBlink') == '1')
-                    elif event.tag == 'SubObject':
-                        row = compile_subobject_event(event.attrib, row['frame'], controls, model_stem, mesh_names or [])
-                    else:
-                        row['effect'] = event.get('Particle')
-                    if row not in rows:
-                        rows.append(row)
+        for name, events in selected_events.items():
+            rows = mapped.setdefault(name, [])
+            for event in events:
+                attrs = event['attributes']
+                row = {'frame': event['frame'], 'type': event['type']}
+                if event['type'] == 'EyeSet':
+                    row.update(state=attrs['Open'], enableBlink=attrs['EnableBlink'] == '1')
+                elif event['type'] == 'SubObject':
+                    row = compile_subobject_event(attrs, row['frame'], parsed['controls'], model_stem, mesh_names or [])
+                else:
+                    row['effect'] = attrs['Particle']
+                if row not in rows:
+                    rows.append(row)
         evidence['approved_events'] = mapped
     return evidence, path
 
