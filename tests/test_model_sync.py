@@ -23,7 +23,7 @@ from rich.progress import Progress as RichProgress
 from bootstrap import ROOT
 from game_data.console import track
 from game_data.model_catalogue import compact_animations, animation_assets, resolve_animation
-from game_data.model_paths import is_asset_path, asset_path_matches, model_path, safe_asset_name
+from game_data.model_paths import asset_digest, asset_path, animation_path, is_asset_path, asset_path_matches, model_path, safe_asset_name
 
 
 SOURCE = ROOT/'src/game_data/sync.py'
@@ -128,6 +128,24 @@ class ModelSync(unittest.TestCase):
         self.save_catalogue()
         (self.dist/'game_objects.json').write_text('{ "example": true }')
         self.client.objects[self.bucket, 'manifest.json'] = {'Body': b'old manifest', 'Metadata': {}}
+
+    def test_animation_namespace_preserves_generic_asset_paths(self):
+        digest = 'a' * 64
+        self.assertEqual(asset_path(digest), f'models/3d/{digest}.glb')
+        self.assertEqual(asset_path(digest, 'Pony_Test'), f'models/3d/{digest}/Pony_Test.glb')
+        path = animation_path(digest, 'idle')
+        self.assertEqual(path, f'models/3d/anim/{digest}/idle.glb')
+        self.assertTrue(is_asset_path(path))
+        self.assertEqual(asset_digest(path), digest)
+        self.assertTrue(asset_path_matches(path, digest, 'idle'))
+        self.assertFalse(asset_path_matches(path, digest, 'idle', fixed_model=True))
+        self.assertFalse(asset_path_matches(path, digest, 'other'))
+        self.assertFalse(asset_path_matches(path, 'b' * 64, 'idle'))
+        for invalid in [f'models/3d/anim/{digest}.glb', f'models/3d/anim/{digest}/../idle.glb',
+                        f'models/3d/anim/{digest}/idle%2F.glb']:
+            with self.subTest(path=invalid):
+                self.assertFalse(is_asset_path(invalid))
+                self.assertIsNone(asset_digest(invalid))
 
     def test_schema_three_native_interaction_closure(self):
         self.catalogue['schemaVersion'] = 3
@@ -347,7 +365,7 @@ class ModelSync(unittest.TestCase):
 
     def make_named(self, ref, name):
         old = self.dist/ref['path']
-        ref['path'] = f"models/3d/{ref['sha256']}/{name}.glb"
+        ref['path'] = f"models/3d/anim/{ref['sha256']}/{name}.glb"
         target = self.dist/ref['path'];target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(old.read_bytes())
 
@@ -366,6 +384,8 @@ class ModelSync(unittest.TestCase):
         warm = AnimationCache(root/'cache')
         bundle = generate(warm)
         self.assertEqual(first, bundle)
+        animation = bundle.catalogue['models']['Pony_Test']['animations'][0]
+        self.assertEqual(animation['path'], f"models/3d/anim/{animation['sha256']}/wave.glb")
         self.assertEqual(warm.stats['compiled'], 0)
         self.catalogue = bundle.catalogue
         for key, data in bundle.files.items():

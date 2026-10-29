@@ -9,7 +9,7 @@ from . import ConversionError, from_native, model_glb, animation_glb
 from .native import NativeInputError, load_native, load_model
 from .animation_cache import AnimationCache
 from .texture_cache import TextureCache
-from ...model_paths import asset_path, model_path, safe_asset_name
+from ...model_paths import asset_path, animation_path, model_path, wardrobe_path, safe_asset_name
 
 if TYPE_CHECKING:
     from luna_kit.model import RKModel
@@ -94,8 +94,8 @@ def convert_native(rk_path: str | Path, anim_path: str | Path, csv_path: str | P
     Mesh, rest and event-source arguments have the same meaning as in
     ``load_native``. No game identity lookup or skeleton retargeting occurs.
     The caller must obtain the model/library association from native metadata.
-    Filename options only change asset keys, never GLB bytes. Defaults retain
-    legacy flat keys; fixed model keys require the exact object identity and
+    Filename options only change asset keys, never GLB bytes. Model and animation defaults retain
+    legacy flat keys; wardrobe keys identify their owner and content digest; fixed model keys require the exact object identity and
     named animation keys use the unchanged native clip name.
     """
     if not isinstance(identity, str) or not identity or any(ord(c) < 32 for c in identity):
@@ -182,11 +182,18 @@ def convert_native(rk_path: str | Path, anim_path: str | Path, csv_path: str | P
         raise NativeInputError('Native events require the explicit interaction profile')
     files = {}
 
-    def asset(data: bytes, name: str | None = None, *, fixed_model: bool = False) -> dict:
+    def asset(data: bytes, name: str | None = None, *, fixed_model: bool = False, wardrobe: bool = False) -> dict:
         if name is not None and not safe_asset_name(name):
             raise NativeInputError("Unsupported native animation filename: " + str(name))
         digest = hashlib.sha256(data).hexdigest()
-        path = model_path(name) if fixed_model else asset_path(digest, name)
+        if wardrobe:
+            path = wardrobe_path(digest, identity)
+        elif fixed_model:
+            path = model_path(name)
+        elif name is not None:
+            path = animation_path(digest, name)
+        else:
+            path = asset_path(digest)
         files[path] = data
         return {"path": path, "sha256": digest, "bytes": len(data), "rigKey": model.rig.key}
 
@@ -200,7 +207,7 @@ def convert_native(rk_path: str | Path, anim_path: str | Path, csv_path: str | P
                 for pid, part in wardrobe['parts'].items()}}
             wardrobe_model.interactions = model.interactions or {'version': 1}
             wardrobe_model.interaction_effects = model.interaction_effects
-            row['wardrobe'] = asset(model_glb(wardrobe_model))
+            row['wardrobe'] = asset(model_glb(wardrobe_model), wardrobe=True)
         except (ValueError, OSError) as error:
             wardrobe_error = str(error)
     if wardrobe_error is not None:

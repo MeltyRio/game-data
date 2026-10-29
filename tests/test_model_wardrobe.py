@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from bootstrap import ROOT
 from game_data import model_gen
+from game_data.model_paths import asset_digest, is_asset_path
 from game_data.model_gen.wardrobe import resolve_wardrobe
 import test_model_generation as generation_fixture
 from test_model_sync import load_sync, MemoryClient
@@ -45,6 +46,9 @@ class WardrobeAssets(unittest.TestCase):
             self.assertEqual((self.dist/baseline['path']).read_bytes(), original[baseline['path']])
         self.assertNotIn('wardrobe', rows['Synthetic_Outfit'])
         ref = rows['Synthetic_Flag']['wardrobe']
+        self.assertEqual(ref['path'], f"models/3d/Synthetic_Flag_wardrobe_{ref['sha256']}.glb")
+        self.assertTrue(is_asset_path(ref['path']))
+        self.assertEqual(asset_digest(ref['path']), ref['sha256'])
         data = (self.dist/ref['path']).read_bytes()
         self.assertEqual(ref['sha256'], hashlib.sha256(data).hexdigest())
         self.assertEqual(ref['bytes'], len(data))
@@ -60,6 +64,27 @@ class WardrobeAssets(unittest.TestCase):
         hidden = glb['extras']['atpInteractions']['hiddenNodes']
         self.assertEqual({glb['nodes'][i]['extras']['atpNativeMeshIndex'] for i in hidden}, {2,5})
         self.assertEqual(glb['extras']['atpRig'], document(original[rows['Synthetic_Flag']['path']])['extras']['atpRig'])
+
+    def test_wardrobe_content_key_is_reused_and_changes_with_its_parts(self):
+        self.prepare_wardrobe()
+        self.generate(public_identities={'Synthetic_Flag'})
+        before = self.catalogue()['models']['Synthetic_Flag']
+        path = self.dist/before['wardrobe']['path']
+        data, stamp = path.read_bytes(), path.stat().st_mtime_ns
+        report = self.generate(public_identities={'Synthetic_Flag'})
+        self.assertEqual(self.catalogue()['models']['Synthetic_Flag'], before)
+        self.assertEqual(path.stat().st_mtime_ns, stamp)
+        self.assertEqual(report['generation']['cache']['animations']['compiled'], 0)
+
+        self.objects['PonyPart']['body1']['PonyPart']['LinkedPart'] = ''
+        self.generate(public_identities={'Synthetic_Flag'})
+        after = self.catalogue()['models']['Synthetic_Flag']
+        self.assertNotEqual(after['wardrobe']['sha256'], before['wardrobe']['sha256'])
+        self.assertNotEqual(after['wardrobe']['path'], before['wardrobe']['path'])
+        self.assertEqual(after['wardrobe']['path'],
+                         f"models/3d/Synthetic_Flag_wardrobe_{after['wardrobe']['sha256']}.glb")
+        self.assertEqual(path.read_bytes(), data)
+        self.assertEqual(after['animations'], before['animations'])
 
     def test_missing_exact_mesh_is_empty_and_alternative_context_is_not_invented(self):
         from game_data.model_gen.wardrobe import interactive_wardrobe
@@ -98,6 +123,19 @@ class WardrobeAssets(unittest.TestCase):
         prepare = load_sync(MemoryClient())['prepare_model_upload']
         _, assets = prepare(self.dist)
         self.assertIn(ref['path'], assets)
+        self.assertEqual(assets[ref['path']]['cache_control'], 'max-age=2592000')
+        for invalid in [
+            f"models/3d/Other_wardrobe_{ref['sha256']}.glb",
+            f"models/3d/Synthetic_Flag_wardrobe_{'0'*64}.glb",
+            f"models/3d/../Synthetic_Flag_wardrobe_{ref['sha256']}.glb",
+            f"models/3d/Synthetic_Flag%2F_wardrobe_{ref['sha256']}.glb",
+        ]:
+            changed = copy.deepcopy(wire)
+            changed['models']['Synthetic_Flag']['wardrobe']['path'] = invalid
+            (self.dist/'models_3d.json').write_text(json.dumps(changed))
+            with self.subTest(path=invalid), self.assertRaisesRegex(ValueError, 'identity, size or path'):
+                prepare(self.dist)
+
         changed = copy.deepcopy(wire)
         changed['models']['Synthetic_Flag']['wardrobe']['rigKey'] = '0'*64
         (self.dist/'models_3d.json').write_text(json.dumps(changed))

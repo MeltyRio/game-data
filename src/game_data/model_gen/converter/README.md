@@ -80,7 +80,7 @@ Older readers must reject the new version rather than show an incomplete scene. 
 Animation rows also have `id`, `name` and `duration` in seconds. Paths are asset
 keys resolved by ATP's existing `createAssetUrl`. Normal generation uses
 `models/3d/<ObjectID>.glb` for the current model and
-`models/3d/<animation-sha256>/<native-clip-name>.glb` for animations. The animation
+`models/3d/anim/<animation-sha256>/<native-clip-name>.glb` for animations. The animation
 directory is the SHA-256 of its unchanged GLB bytes, separating same-named clips
 from different rigs. Exact native spelling and case are preserved and must match
 `[A-Za-z0-9_-]+`; unsupported names fail with a diagnostic, without escaping,
@@ -89,7 +89,8 @@ and retain `models/3d/<sha256>.glb`; their animations use native clip names.
 Textures and buffers are embedded. Byte-identical animations with the same
 native name share one asset key.
 
-The standalone `convert_native` API keeps legacy flat hash paths by default.
+The standalone `convert_native` API keeps legacy flat model and animation hash paths by default.
+Wardrobe keys identify the owner and content digest: `<ObjectID>_wardrobe_<sha256>.glb`.
 `model_filename=identity` selects the fixed Object ID path;
 `animation_filenames=True` selects named, content-addressed animation paths.
 These options change only asset keys, never GLB bytes or catalogue identity.
@@ -351,7 +352,7 @@ strict conversions and the GLB bytes of in-range clips are unchanged.
 ## Optional owner wardrobe
 
 Schema 4 pony rows may include `wardrobe: {path, sha256, bytes, rigKey}`: one
-additional, content-addressed GLB in the existing `models/3d/` namespace. The
+additional, content-addressed GLB at `models/3d/<ObjectID>_wardrobe_<sha256>.glb`. The
 viewer requests it only when opening that owner's wardrobe. Ordinary pony and
 complete-outfit GLBs keep their current bytes and independent animation refs.
 The optional asset uses the owner's exact rig, inverse binds and rest pose;

@@ -16,7 +16,7 @@ from .core import Rig, clip_from_native
 from .gltf import animation_glb
 from .native_animation import NativeAnimation, NativeClip, read_animation
 from ...model_catalogue import animation_assets, resolve_animation
-from ...model_paths import asset_path, asset_path_matches
+from ...model_paths import animation_path, asset_path_matches
 
 if TYPE_CHECKING:
     from types_boto3_s3.client import S3Client
@@ -128,7 +128,9 @@ class AnimationCache:
                 or document['extras']['atpRig']['parents'] != rig.parents
                 or 'events' in document['extras']['atpClip']):
             raise ValueError('Cached animation contains incompatible rig or model events')
-        return {key: ref[key] for key in ('path', 'sha256', 'bytes', 'rigKey', 'id', 'name', 'duration')}
+        result = {key: ref[key] for key in ('path', 'sha256', 'bytes', 'rigKey', 'id', 'name', 'duration')}
+        result['path'] = animation_path(ref['sha256'], row['name'] if named else None)
+        return result
 
     def _remember(self, key: str, ref: dict, data: bytes) -> None:
         self.records[key] = {'key': key, 'asset': ref}
@@ -212,7 +214,7 @@ class AnimationCache:
         self.stats['compile_seconds'] += perf_counter() - start
         self.stats['compiled'] += 1
         digest = hashlib.sha256(data).hexdigest()
-        ref = dict(path=asset_path(digest, row['name'] if named else None), sha256=digest,
+        ref = dict(path=animation_path(digest, row['name'] if named else None), sha256=digest,
                    bytes=len(data), rigKey=rig.key, id=row['name'], name=row['name'],
                    duration=len(row['translations']) / row['fps'])
         self._write(key, ref, data)

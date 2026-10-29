@@ -71,7 +71,7 @@ class AdditionalGeneration(unittest.TestCase):
         self.assertEqual(child['controller'], 'native-first-then-random-v1')
         self.assertEqual(child['model']['path'], f"models/3d/{child['model']['sha256']}.glb")
         for clip in child['model']['animations']:
-            self.assertEqual(clip['path'], f"models/3d/{clip['sha256']}/{clip['id']}.glb")
+            self.assertEqual(clip['path'], f"models/3d/anim/{clip['sha256']}/{clip['id']}.glb")
         self.assertEqual(child['parentRoot'], 0)
         self.assertEqual([clip['id'] for clip in child['model']['animations']], ['second', 'first'])
         self.assertTrue(report['identities']['Synthetic_Flag']['additional_actor']['converted'])

@@ -100,7 +100,7 @@ class ExportTests(unittest.TestCase):
         for before, after, name in [(old, new, 'Synthetic_Flag'),
                                    (old['animations'][0], new['animations'][0], 'wave')]:
             self.assertEqual(after['path'], (f'models/3d/{name}.glb' if name == 'Synthetic_Flag'
-                                           else f"models/3d/{after['sha256']}/{name}.glb"))
+                                           else f"models/3d/anim/{after['sha256']}/{name}.glb"))
             self.assertEqual(named.files[after['path']], legacy.files[before['path']])
             for key in ('sha256', 'bytes', 'rigKey'):
                 self.assertEqual(after[key], before[key])

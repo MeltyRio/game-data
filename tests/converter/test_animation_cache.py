@@ -53,6 +53,63 @@ class AnimationCaching(unittest.TestCase):
             self.assertEqual(version.stats['compiled'], 1)
 
 
+    def test_old_cache_paths_reuse_bytes_without_encoding(self):
+        from game_data.model_gen.converter.animation_cache import INDEX_KEY
+        from game_data.model_gen.converter.native import load_native
+        from game_data.model_gen.converter.core import rig_from_native
+        class Bucket:
+            def __init__(self, objects): self.objects = objects; self.reads = []
+            def get_object(self, *, Bucket, Key):
+                self.reads.append(Key)
+                return {'Body': io.BytesIO(self.objects[Key])}
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root/'native'
+            write_fixture(source)
+            native = load_native(source/'flag.rk', source/'flag.anim', source/'flag.csv', ['wave'],
+                visible_meshes=['flag'], rest_name='rest', event_path=source/'flag.xml')
+            rig, row = rig_from_native(native), native['clips'][0]
+            cold = AnimationCache(root/'cold')
+            expected, data = cold.compile(native, row, rig, named=True)
+            key, = cold.records
+            expected = {**expected, 'path': f"models/3d/anim/{expected['sha256']}/wave.glb"}
+            self.assertEqual(cold.version[0], 'skeletal-glb-v2')
+            uncached = convert_native(source/'flag.rk', source/'flag.anim', source/'flag.csv', ['wave'],
+                identity='Synthetic', visible_meshes=['flag'], rest_name='rest', event_path=source/'flag.xml',
+                animation_filenames=True)
+            self.assertEqual(uncached.files[uncached.catalogue['models']['Synthetic']['animations'][0]['path']], data)
+            old_paths = [f"models/3d/{expected['sha256']}.glb", f"models/3d/{expected['sha256']}/wave.glb"]
+            for index, old_path in enumerate(old_paths):
+                old_ref = {**expected, 'path': old_path}
+                for layer in ('disk', 'remote'):
+                    with self.subTest(path=old_path, layer=layer):
+                        cache = AnimationCache(root/f'{layer}-{index}')
+                        if layer == 'disk':
+                            cache._write(key, old_ref, data)
+                        else:
+                            bucket = Bucket({INDEX_KEY: json.dumps({'version': 1, 'entries': {
+                                key: {'key': key, 'asset': old_ref}}}, sort_keys=True).encode(), old_path: data})
+                            cache.load_remote(bucket, 'local-test')
+                        with patch('game_data.model_gen.converter.animation_cache.animation_glb',
+                                   side_effect=AssertionError('cache hit must not encode')):
+                            actual, reused = cache.compile(native, row, rig, named=True)
+                            memory = cache.compile(native, row, rig, named=True)
+                        self.assertEqual(actual, expected)
+                        self.assertEqual(json.dumps(actual), json.dumps(expected))
+                        self.assertEqual(memory, (expected, data))
+                        self.assertEqual(cache.stats['memory_hits'], 1)
+                        self.assertEqual(reused, data)
+                        self.assertEqual(cache.stats[f'{layer}_hits'], 1)
+                        self.assertEqual(cache.stats['compiled'], 0)
+                        self.assertEqual(cache.records[key]['asset'], expected)
+                        if layer == 'remote':
+                            self.assertEqual(bucket.reads, [INDEX_KEY, old_path])
+                            disk = AnimationCache(cache.directory)
+                            with patch('game_data.model_gen.converter.animation_cache.animation_glb',
+                                       side_effect=AssertionError('remote hit must persist reusable bytes')):
+                                self.assertEqual(disk.compile(native, row, rig, named=True), (expected, data))
+                            self.assertEqual(disk.stats['disk_hits'], 1)
+
     def test_injected_cache_cannot_write_into_public_output(self):
         from game_data.model_gen import generate_models
         from native_fixture import write_native_tables

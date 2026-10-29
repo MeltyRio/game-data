@@ -188,14 +188,14 @@ def prepare_model_upload(dist_folder: Path) -> tuple[bytes | None, dict[str, Mod
         raise ValueError('Unsupported 3D catalogue')
     shared_animations = animation_assets(catalogue)
     assets: dict[str, ModelUploadAsset] = {}
-    def asset(ref: object, name: str | None = None, *, fixed_model: bool = False) -> None:
+    def asset(ref: object, name: str | None = None, *, fixed_model: bool = False, wardrobe: bool = False) -> None:
         if not isinstance(ref, dict):
             raise ValueError('Invalid 3D asset reference')
         digest, rig, size = ref.get('sha256'), ref.get('rigKey'), ref.get('bytes')
         if (not isinstance(digest, str) or not re.fullmatch(r'[a-f0-9]{64}', digest)
                 or not isinstance(rig, str) or not re.fullmatch(r'[a-f0-9]{64}', rig)
                 or type(size) is not int or not 0 < size <= 9007199254740991
-                or not asset_path_matches(ref.get('path'), digest, name, fixed_model=fixed_model)):
+                or not asset_path_matches(ref.get('path'), digest, name, fixed_model=fixed_model, wardrobe=wardrobe)):
             raise ValueError('Invalid 3D asset identity, size or path')
         key = ref['path']
         value: ModelUploadAsset = {'sha256': digest, 'bytes': size, 'rigKey': rig,
@@ -217,7 +217,7 @@ def prepare_model_upload(dist_folder: Path) -> tuple[bytes | None, dict[str, Mod
             if (catalogue['schemaVersion'] != 4 or not isinstance(wardrobe, dict)
                     or wardrobe.get('rigKey') != model['rigKey']):
                 raise ValueError('Invalid or incompatible wardrobe asset')
-            asset(wardrobe)
+            asset(wardrobe, identity, wardrobe=True)
         animations = model.get('animations')
         if not isinstance(animations, list) or (require_playable and not animations):
             raise ValueError('Invalid 3D animation list')

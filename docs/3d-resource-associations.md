@@ -402,7 +402,8 @@ ordinary materials are not replaced or visually animated by this clock.
 Public output is `dist/models_3d.json` plus GLBs:
 
 - Current main model: `dist/models/3d/<ObjectID>.glb`.
-- Animation: `dist/models/3d/<animation-sha256>/<native-clip-name>.glb`.
+- Owner wardrobe: `dist/models/3d/<ObjectID>_wardrobe_<sha256>.glb`.
+- Animation: `dist/models/3d/anim/<animation-sha256>/<native-clip-name>.glb`.
 - Anonymous AdditionalObject model: `dist/models/3d/<sha256>.glb`, since this
   internal actor has no game Object ID. Its animations use the named format.
 
@@ -411,8 +412,8 @@ preserved; only `[A-Za-z0-9_-]+` is accepted, with unsupported names diagnosed
 per action or identity rather than rewritten. The animation digest directory separates same-named clips from different rigs.
 A main model has one fixed current-version address and is replaced on update. Byte-identical animations sharing a
 native name use one key. Legacy flat hash and digest-directory model keys remain
-readable. Direct calls to `convert_native` retain flat hash keys unless filename
-options are supplied. Named model and animation keys must match their
+readable. Direct calls to `convert_native` retain flat model and animation hash keys unless filename
+options are supplied; wardrobe keys always identify their owner and content digest. Named model and animation keys must match their
 catalogue Object ID and animation ID respectively. Models
 contain geometry, textures and a rest skeleton; animations contain the
 compatible skeleton and STEP tracks with optional native interpolation samples.
