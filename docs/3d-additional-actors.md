@@ -139,7 +139,7 @@ clients reject these catalogues instead of silently omitting behavior. The child
 retains the same strict independent controller described here.
 
 Both parent and child bundles must finish successfully, and all their asset keys
-and content digests must validate, before any scene files are staged. Shared child bundles
+must validate before any scene files are staged. Shared child bundles
 are reused only within the current build; placement is computed separately for
 each owner. A failed child excludes the whole affected identity. No converted
 child is inserted as a public top-level GameData identity.
@@ -147,7 +147,7 @@ child is inserted as a public top-level GameData identity.
 The child has an independent animation mixer and lifetime. It can keep playing
 while the parent rests, resets or switches its selected action. It shares the
 existing scene, camera, renderer, page-hidden pause and disposal lifecycle.
-Fetching, cancellation, hash validation, source GLTF cleanup and final disposal
+Fetching, cancellation, asset size and rig checks, source GLTF cleanup and final disposal
 must cover the complete scene; child clips never enter the parent's action menu.
 Initial framing covers both actors. Future motion can still exceed initial
 bounds, as with the existing single-actor framing limitation.

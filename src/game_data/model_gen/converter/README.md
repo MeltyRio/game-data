@@ -118,16 +118,18 @@ from Luna
 [PR #12](https://github.com/ego-lay-atman-bay/luna-kit/pull/12) until its ANIM API
 is merged.
 
-The caller supplies the complete current extraction closure. In that data set,
-an absent RKM uses the verified 11.4.3c native material-loader default: Luna's
-`parse_rkm` requests the RK's original material name as an exact same-name PVR,
+The caller supplies the complete current extraction closure. An ordinary RKM
+absent from the supplied inputs uses the verified 11.4.3c native material-loader
+default: Luna's `parse_rkm` requests the RK's original material name as an exact
+same-name PVR,
 without inventing an RKM or substituting a PNG or another texture name. Empty
 source fields preserve native `rkshader`, opaque blending, culling, depth
 write/test and repeat wrapping; Luna's different dataclass cull/depth defaults
 are not copied. Private material provenance records `native-default-without-rkm`
 and lists only actual source files. Existing RKM files remain authoritative;
-malformed, unreadable, non-file or escaped paths are errors. A missing file in
-an incomplete or failed extraction is not proof of native absence. The original
+malformed, unreadable, non-file or escaped paths are errors. The supplied files
+cannot distinguish native omission from download or extraction loss; the same
+absent-RKM rule applies, and its exact same-name PVR remains mandatory. The original
 first-material RKM required for the separately reviewed hair clock stays strict.
 
 The locked Luna RK reader validates binary section bounds, record sizes and

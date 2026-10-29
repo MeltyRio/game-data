@@ -137,7 +137,7 @@ class EmitterTextureCacheTests(unittest.TestCase):
                 with Image.open(io.BytesIO(actual[1])) as image:
                     self.assertEqual(image.size, (2, 2))
                     self.assertEqual(image.getpixel((0, 0)), (255, 0, 0, expected))
-                with patch('luna_kit.pvr.PVR', side_effect=AssertionError('Decoded cached PVR')):
+                with patch('game_data.model_gen.native_emitter.PVR', side_effect=AssertionError('Decoded cached PVR')):
                     self.assertEqual(load_native_emitter(self.folder, DIZZY_EMITTER, texture_cache=self.cache), actual)
         self.assertEqual((self.cache.misses, self.cache.hits), (4, 4))
 

@@ -11,19 +11,29 @@ import csv
 import hashlib
 import io
 import math
+import re
 import struct
 from pathlib import Path
 from typing import Collection, TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from luna_kit.model import RKModel
-    from .texture_cache import TextureCache
-    from .animation_cache import AnimationCache
+from xml.etree import ElementTree as ET
 
 import numpy as np
 from numpy.typing import NDArray
+from PIL import Image
 
+from luna_kit.model import RKModel
+from luna_kit.model.rk import parse_rkm
+from luna_kit.pvr import PVR
+from luna_kit.utils import image_has_alpha, put_alpha
+
+from ..interactions import parse_events
+from ..visibility import compile_subobject_event
+from .csv import CsvError, read_clips
 from .native_animation import read_animation, NATIVE_POSITION_SCALE
+
+if TYPE_CHECKING:
+    from .texture_cache import TextureCache
+    from .animation_cache import AnimationCache
 
 LUNA_DEPENDENCY = "game-data uv.lock: luna-kit"
 MAX_NATIVE_JOINT_FRAME_SAMPLES = 1_000_000
@@ -86,8 +96,6 @@ def _validate_model_layout(model: RKModel) -> None:
 
 def read_model_mesh_names(path: str | Path) -> list[str]:
     """Read discovery metadata; selected scenes still require full load_model validation."""
-    from luna_kit.model import RKModel
-
     try:
         model = RKModel()
         with Path(path).open('rb') as stream:
@@ -100,8 +108,6 @@ def read_model_mesh_names(path: str | Path) -> list[str]:
 
 def load_model(path: str | Path) -> RKModel:
     """Read one RK for both native appearance selection and conversion."""
-    from luna_kit.model import RKModel
-
     try:
         model = RKModel(str(path))
     except (ValueError, AssertionError, IndexError, struct.error, ZeroDivisionError) as error:
@@ -169,7 +175,6 @@ def _remove_collapsed_zero_weight_triangles(
     is one. Three all-zero vertices therefore occupy the same model origin for
     every finite palette/WVP. Mixed triangles do not have this property.
     """
-    import numpy as np
     zero = np.all(weights == 0, axis=1)
     if not any(np.any(zero[p["indices"]]) for p in primitives):
         return primitives, materials, None
@@ -204,7 +209,6 @@ def _remove_collapsed_zero_weight_triangles(
 
 
 def _csv_clips(path: Path, frame_count: int, required: set[str], frame_boundary: str = 'reject') -> tuple[list[dict], int, list[dict]]:
-    from .csv import CsvError, read_clips
     try:
         return read_clips(path, frame_count, required, frame_boundary=frame_boundary)
     except CsvError as error:
@@ -219,8 +223,6 @@ def _verify_event_source(event_path: str | Path | None, events_absent: bool, nam
         raise NativeInputError("Supply an event XML or explicitly confirm its native source absence")
     if events_absent:
         return {"status": "source-absence-confirmed-by-caller", "checked_clips": sorted(names)}, None
-    import re
-    from xml.etree import ElementTree as ET
     path = Path(event_path).resolve()
     if not path.is_file():
         raise NativeInputError(f"Missing native event XML: {path.name}")
@@ -239,8 +241,6 @@ def _verify_event_source(event_path: str | Path | None, events_absent: bool, nam
     for animation_list in root.iter("AnimationList"):
         if any(node.tag != "Animation" for node in animation_list):
             raise NativeInputError("Unsupported native animation declaration")
-    from ..interactions import parse_events
-    from ..visibility import compile_subobject_event
     parsed = parse_events(root) if event_approvals is not None else None
     approved = (event_approvals or {}).get(path, [])
     for node in root.iter("Animation"):
@@ -327,14 +327,6 @@ def load_native(
     must not supply a task/actor uniform override; those controllers are not
     represented by a standalone skeletal clip.
     """
-    import numpy as np
-    try:
-        from luna_kit.model.rk import parse_rkm
-        from luna_kit.pvr import PVR
-        from luna_kit.utils import image_has_alpha, put_alpha
-    except ImportError as error:
-        raise NativeInputError("The existing game-data Luna Kit model dependencies are unavailable") from error
-
     rk_path, anim_path, csv_path = map(lambda value: Path(value).resolve(), (rk_path, anim_path, csv_path))
     for path in (rk_path, anim_path, csv_path):
         if not path.is_file():
@@ -465,7 +457,6 @@ def load_native(
                 alpha_path = None
             def decode_texture() -> tuple[bytes, int, int]:
                 if properties.NoCompress:
-                    from PIL import Image
                     data = texture_path.read_bytes()
                     try:
                         with Image.open(io.BytesIO(data)) as image:

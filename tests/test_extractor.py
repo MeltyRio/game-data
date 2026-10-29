@@ -26,7 +26,7 @@ class ExtractionFailures(unittest.TestCase):
         self.root = Path(temporary.name)
         self.arks, self.output = self.root/'arks', self.root/'extracted'
 
-    def test_only_failed_rkms_are_reported_and_other_files_still_extract(self):
+    def test_per_file_errors_are_logged_and_other_files_still_extract(self):
         failures = {'body.rkm', 'materials/eyes.RKM', 'unrelated.txt'}
         write_ark(self.arks, {name: b'synthetic' for name in
                              ['body.rkm', 'materials/eyes.RKM', 'unrelated.txt', 'body.pvr']})
@@ -41,14 +41,10 @@ class ExtractionFailures(unittest.TestCase):
              patch.object(extractor, 'console', Console(quiet=True)) as console, \
              patch.object(console, 'print', wraps=console.print) as printing:
             result = extractor.extract(self.arks, self.output)
-        self.assertEqual(result, {'body.rkm', 'materials/eyes.RKM'})
+        self.assertIsNone(result)
         self.assertEqual((self.output/'body.pvr').read_bytes(), b'synthetic')
         errors = [call.args[0] for call in printing.call_args_list
                   if call.args and isinstance(call.args[0], OSError)]
         self.assertEqual(len(errors), 3)
         self.assertEqual({error.__notes__[0] for error in errors},
                          {'filename: ' + name for name in failures})
-
-        # A later extraction has its own result, not persistent failure state.
-        with patch.object(extractor, 'console', Console(quiet=True)):
-            self.assertEqual(extractor.extract(self.arks, self.output), set())

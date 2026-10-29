@@ -275,36 +275,41 @@ class ModelGeneration(unittest.TestCase):
         self.assertEqual(report['generation']['excluded']['Synthetic_Missing']['code'], 'unresolved_association')
         self.assertEqual(report['generation']['coverage'], 'partial; only validated basic scenes')
 
-    def test_failed_material_excludes_only_its_model_even_if_stale_file_exists(self):
+    def test_invalid_present_material_excludes_only_its_model(self):
         copy_rk_with_material(self.native/'flag.rk', self.native/'broken.rk', 'broken')
-        (self.native/'broken.rkm').write_bytes((self.native/'flag.rkm').read_bytes())
+        (self.native/'broken.rkm').write_text('not a material property')
         self.objects = write_native_tables(self.native, {
             'Synthetic_Broken': {'model':'broken', 'animation':'flag', 'events':'flag'},
             'Synthetic_Flag': {'model':'flag', 'animation':'flag', 'events':'flag'}})
-        try:
-            report = self.generate(failed_rkms={'broken.rkm', 'unrelated/flag.rkm'})
-        except Exception as error:
-            self.fail(f'An isolated material failure stopped generation: {error}')
+        report = self.generate()
         self.assertEqual(set(self.assert_closed()['models']), {'Synthetic_Flag'})
-        self.assertEqual(report['generation']['excluded']['Synthetic_Broken']['code'], 'material_extraction_failed')
+        self.assertEqual(report['generation']['excluded']['Synthetic_Broken']['code'], 'NativeInputError')
+        self.assertIn('Invalid or duplicate material properties: broken.rkm',
+                      report['generation']['excluded']['Synthetic_Broken']['reason'])
         self.assertFalse((self.dist/'models/3d/Synthetic_Broken.glb').exists())
 
-    def test_failed_material_candidates_respect_exact_source_art_precedence(self):
+    def test_material_candidates_respect_exact_source_art_precedence(self):
         copy_rk_with_material(self.native/'flag.rk', self.native/'art.rk', 'art.psd')
-        for name in ('art.psd.rkm', 'art.rkm'):
-            (self.native/name).write_bytes((self.native/'flag.rkm').read_bytes())
+        valid_material = (self.native/'flag.rkm').read_bytes()
+        (self.native/'art.psd.rkm').write_bytes(valid_material)
+        (self.native/'art.rkm').write_text('not a material property')
         self.objects = write_native_tables(self.native, {
             'Synthetic_Art': {'model':'art', 'animation':'flag', 'events':'flag'},
             'Synthetic_Flag': {'model':'flag', 'animation':'flag', 'events':'flag'}})
-        try:
-            report = self.generate(failed_rkms={'art.rkm'})
-            self.assertEqual(set(self.assert_closed()['models']), {'Synthetic_Art', 'Synthetic_Flag'})
-            (self.native/'art.psd.rkm').unlink()
-            report = self.generate(failed_rkms={'art.psd.rkm'})
-        except Exception as error:
-            self.fail(f'An isolated source-art failure stopped generation: {error}')
+        self.generate()
+        self.assertEqual(set(self.assert_closed()['models']), {'Synthetic_Art', 'Synthetic_Flag'})
+
+        (self.native/'art.psd.rkm').write_text('not a material property')
+        (self.native/'art.rkm').write_bytes(valid_material)
+        report = self.generate()
         self.assertEqual(set(self.assert_closed()['models']), {'Synthetic_Flag'})
-        self.assertEqual(report['generation']['excluded']['Synthetic_Art']['code'], 'material_extraction_failed')
+        self.assertEqual(report['generation']['excluded']['Synthetic_Art']['code'], 'NativeInputError')
+        self.assertIn('Invalid or duplicate material properties: art.psd.rkm',
+                      report['generation']['excluded']['Synthetic_Art']['reason'])
+
+        (self.native/'art.psd.rkm').unlink()
+        self.generate()
+        self.assertEqual(set(self.assert_closed()['models']), {'Synthetic_Art', 'Synthetic_Flag'})
 
     def test_source_read_error_excludes_only_affected_identity(self):
         (self.native/'broken.xml').write_bytes((self.native/'flag.xml').read_bytes())

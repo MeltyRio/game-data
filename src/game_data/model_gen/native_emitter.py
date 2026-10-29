@@ -14,6 +14,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from xml.etree import ElementTree as ET
 
+from PIL import Image
+from luna_kit.model.rk import parse_rkm
+from luna_kit.pvr import PVR
+from luna_kit.utils import image_has_alpha, put_alpha
+
 from .converter.native import NativeInputError, _sibling
 
 if TYPE_CHECKING:
@@ -99,11 +104,6 @@ def parse_dizzy_particle(raw: bytes) -> tuple[str, dict]:
 def _read_native_emitter(folder: str | Path, name: str, *,
                          texture_cache: TextureCache | None = None) -> tuple[dict, bytes, list[str]]:
     """Return (JSON profile without texture index, PNG bytes, private sources)."""
-    from PIL import Image
-    from luna_kit.model.rk import parse_rkm
-    from luna_kit.pvr import PVR
-    from luna_kit.utils import image_has_alpha, put_alpha
-
     _check(name == DIZZY_EMITTER, 'Unsupported native emitter: ' + str(name))
     folder = Path(folder)
     source = _sibling(folder, name + '.particle')

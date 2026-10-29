@@ -9,11 +9,9 @@ from rich.progress import Progress, TextColumn, BarColumn, MofNCompleteColumn, T
 from glob import glob
 from pathlib import Path
 
-def extract(arks_dir: Path, output: Path, aes_key: bytes | None = None) -> set[str]:
-    """Extract with Luna; return RKM paths whose extraction raised this run."""
+def extract(arks_dir: Path, output: Path, aes_key: bytes | None = None):
     arks_dir = Path(arks_dir)
     output = Path(output)
-    failed_rkms = set()
 
     arks = os.listdir(arks_dir)
     try:
@@ -35,8 +33,6 @@ def extract(arks_dir: Path, output: Path, aes_key: bytes | None = None) -> set[s
                 except Exception as e:
                     e.add_note(f'filename: {filename}')
                     console.print(e)
-                    if Path(filename).suffix.lower() == '.rkm':
-                        failed_rkms.add(filename)
     
 
     console.print('Splitting texatlas files')
@@ -67,5 +63,4 @@ def extract(arks_dir: Path, output: Path, aes_key: bytes | None = None) -> set[s
             progress.update(files_progress, advance = 1)
             
     console.print('[green]Done![/]')
-    return failed_rkms
 

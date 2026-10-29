@@ -106,7 +106,6 @@ def build_cdn(
     notifier = Notifier()
 
     success: bool = True
-    failed_rkms = set()
     model_cache = None
 
     aes_key: bytes | None = None
@@ -266,16 +265,13 @@ def build_cdn(
     if 'extract' not in skip:
         console.print('Extracting files')
         try:
-            failed_rkms = extract(arks_dir, extracted_dir, aes_key = aes_key)
+            extract(arks_dir, extracted_dir, aes_key = aes_key)
         except:
             console.print_exception()
             console.print('[red]Failed to extract files[/]')
             success = False
             if 'model_gen' not in skip:
                 return False
-        else:
-            if failed_rkms and 'model_gen' not in skip:
-                console.print('[yellow]RKM extraction failed; affected 3D models will be excluded[/]')
 
         console.line()
 
@@ -327,7 +323,7 @@ def build_cdn(
                 outfit_owners={identity: costume.pony
                                for identity, costume in game_data.game_objects.costume.objects.items()
                                if costume.pony},
-                failed_rkms=failed_rkms, animation_cache=model_cache,
+                animation_cache=model_cache,
             )
             console.print(report['summary'])
 

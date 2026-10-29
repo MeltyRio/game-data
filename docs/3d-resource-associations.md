@@ -21,25 +21,23 @@ model-generation extraction logic. Tests against retained game sources and
 private release-integrity records are kept outside this repository; none of those resources are fixtures.
 
 The extractor keeps logging per-file errors and continuing with Luna's
-`ARK.extract()`. It returns only RKM paths that raised during that invocation.
-With model generation enabled, those paths become private generation diagnostics.
-Each identity whose RK materials or declared additional actor depend on a failed
-RKM is excluded while unaffected identities continue. Exact material names keep
-precedence over the reviewed source-art suffix alternative; a failed candidate
-cannot fall back to a different RKM or the native absent-RKM default. The check
-conservatively includes hidden materials and the hair clock's first material.
-An overall extraction exception still stops the build before model generation,
-upload and the final DLC status update because its affected inputs are unknown.
-A later same-name extraction does not clear an earlier failure. Non-RKM per-file
-errors and builds using `--skip model_gen` retain their existing handling.
-A natively absent RKM does not produce an extraction error, so the verified
-default material remains supported. This does not check that every required
-archive was downloaded.
+`ARK.extract()`. Generation resolves material dependencies from the supplied
+files at conversion time. Exact material names keep precedence over the reviewed
+`.psd`/`.tga` source-art suffix alternative. Present malformed or unreadable RKM
+files remain errors and exclude the affected identity while unaffected identities
+continue. An absent ordinary RKM uses the verified native material default and
+still requires the original material name's PVR. This applies equally when a
+per-file extraction failure left no RKM; file absence alone cannot establish why
+the resource is missing. The hair clock's first-material RKM and native emitter
+RKM remain mandatory.
 
-`--skip extract` continues to use the existing files without this run's extraction
-result. The caller is responsible for providing a complete, successfully
-extracted input set for the selected game version; skipping is not an automatic
-integrity check. No confirmation flag or persistent source index is added.
+With model generation enabled, an overall extraction exception still stops the
+build before model generation, upload and the final DLC status update because its
+affected inputs are unknown. Builds using `--skip model_gen` retain their existing
+handling. The caller is responsible for providing a complete, successfully
+extracted input set for the selected game version, including when `--skip extract`
+uses existing files. Neither path checks that every required archive was
+downloaded; skipping extraction is not an automatic integrity check.
 
 Normal generation uses `ponybook-preferred`: select the supported native Book
 appearance, retaining the independently validated World preview if Book selection
@@ -562,8 +560,9 @@ uv run --no-sync python -m unittest discover -s tests -v
 
 These tests use self-authored native-format inputs and do not require game
 resources or cloud credentials. They cover key conversion, native association,
-PonyBook interaction, extraction-failure and upload-order regressions; they do
-not demonstrate the appearance of real characters.
+PonyBook interaction, supplied-file material resolution, extraction-failure and
+upload-order regressions; they do not demonstrate the appearance of real
+characters.
 
 Offline tests bootstrap only the source package namespace to avoid CLI/cloud
 initialization; they do not replace production dependencies. The pipeline wiring
@@ -607,7 +606,7 @@ files with current tables. The important input categories are:
 | `data_ver.xml`, `questmanager.xml`, `*.loc`, and the other normal game-data tables, images and SWFs | The normal Transformer still processes the game's data before model generation. Keep its complete usual inputs, including extracted atlas images. |
 | Referenced `.rk` models | Geometry, skeleton and named visible parts. |
 | Declared library `.anim` and matching `.csv` | Animation frames and native clip names/ranges. These are resolved from native declarations, not paired by guessing. |
-| Native `.rkm`, `.pvr`, `.alpha.pvr` and `.png` dependencies | Materials and textures. Retain RKM files that exist in the release; only a genuinely absent native RKM may use the verified default. |
+| Native `.rkm`, `.pvr`, `.alpha.pvr` and `.png` dependencies | Materials and textures. Retain RKM files that exist in the release; an absent ordinary RKM in the supplied inputs uses the verified default and requires the original material name's PVR. |
 | Referenced controller `.xml` | Appearance and animation event checks. |
 
 For example, the verified 11.4.3c Twilight declaration names

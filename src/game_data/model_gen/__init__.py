@@ -1,5 +1,5 @@
 """Generate the optional 3D catalogue inside the existing game-data build."""
-from collections.abc import Collection, Iterable, Mapping
+from collections.abc import Collection, Mapping
 from functools import lru_cache
 import json
 from pathlib import Path
@@ -17,7 +17,7 @@ from ..model_catalogue import compact_animations
 from ..model_paths import asset_digest, is_asset_path, model_path
 from .converter import ConversionError
 from .converter.export import AssetBundle, convert_native
-from .converter.native import NativeInputError, load_model, material_dependency_names, read_model_mesh_names
+from .converter.native import NativeInputError, load_model, read_model_mesh_names
 from .selection import SelectionError, index_event_files, select_native_view
 from .interactions import InteractionError, prepare_interactions, resolve_eye_meshes
 from .native_emitter import load_native_emitter
@@ -52,20 +52,6 @@ def _render_override(campaign: DefaultGameCampaignType, category: str, identity:
     return visit(override)
 
 
-def _check_failed_materials(folder: Path, model: dict, failed_paths: set[Path]) -> None:
-    """A known extraction failure cannot use absent-RKM or suffix fallback."""
-    for material in model['materials']:
-        for name in material_dependency_names(material):
-            path = (folder/name).resolve()
-            if path in failed_paths:
-                raise SelectionError('material_extraction_failed',
-                    f'RKM extraction failed for {model["file"]}: {name}')
-            # Match converter precedence: an existing exact source wins over
-            # its optional source-art suffix alternative, including failures.
-            if path.is_file():
-                break
-
-
 def _publish_local(stage: Path, dist: Path, catalogue: dict) -> None:
     """Publish this namespace: models may be replaced before the catalogue."""
     owned = dist/'models/3d'
@@ -98,7 +84,7 @@ def generate_models(native_objects: GameObjectData, extracted_dir: str | Path, d
                     report_path: str | Path, *, campaign: DefaultGameCampaignType,
                     public_identities: Collection[str] | None = None,
                     outfit_owners: Mapping[str, str] | None = None,
-                    display_profile: str = 'ponybook-preferred', failed_rkms: Iterable[str] = (),
+                    display_profile: str = 'ponybook-preferred',
                     animation_cache: AnimationCache | None = None,
                     cache_dir: str | Path | None = None, texture_cache_bytes: int = 512 * 1024**2) -> dict:
     """Discover and convert supported objects; all other objects get diagnostics.
@@ -109,8 +95,6 @@ def generate_models(native_objects: GameObjectData, extracted_dir: str | Path, d
     if not isinstance(campaign, dict):
         raise ValueError('The current parsed defaultGameCampaign is required')
     folder, dist, report_path = Path(extracted_dir), Path(dist_dir), Path(report_path)
-    failed_rkms = set(failed_rkms)
-    failed_paths = {(folder/name).resolve() for name in failed_rkms}
     if report_path.resolve().is_relative_to(dist.resolve()):
         raise ValueError('Private 3D report must stay outside public dist')
     cache_dir = Path(cache_dir) if cache_dir is not None else report_path.parent/'model-cache'
@@ -131,7 +115,6 @@ def generate_models(native_objects: GameObjectData, extracted_dir: str | Path, d
                           'policy': 'unverified visual overrides exclude the affected object'}
     report['source_policy'] = 'Use the existing extractor output; no independent release inventory or downloader'
     report['generation'] = {'status': 'building', 'converted': 0, 'excluded': {},
-                            'failed_rkm_extractions': sorted(failed_rkms),
                             'coverage': 'partial; only validated basic scenes'}
     catalogue = {'schemaVersion': 1, 'models': {}}
     referenced: set[str] = set()
@@ -147,8 +130,6 @@ def generate_models(native_objects: GameObjectData, extracted_dir: str | Path, d
         info = report['models'][name]
         info.update(meshes=[mesh.name for mesh in model.meshes],
                     materials=[material.name for material in model.materials])
-        if failed_paths:
-            _check_failed_materials(folder, info, failed_paths)
         return model
 
     event_files = index_event_files(folder)

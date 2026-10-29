@@ -93,7 +93,7 @@ class NativeAdapterTests(unittest.TestCase):
                 _, mask = self.pvr_fixture(embedded_alpha=alpha)
                 mask.unlink()
                 (self.folder / 'body.rkm').unlink()
-                with patch('luna_kit.model.rk.parse_rkm', wraps=parse_rkm) as parser:
+                with patch('game_data.model_gen.converter.native.parse_rkm', wraps=parse_rkm) as parser:
                     native = self.load()
                 parser.assert_called_once_with(str((self.folder / 'body.rkm').resolve()))
                 self.assertEqual(native['materials'][0]['rkm_fields'], {})

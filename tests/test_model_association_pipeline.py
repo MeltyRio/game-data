@@ -69,7 +69,7 @@ class Pipeline(unittest.TestCase):
         self.writer.assert_called_once_with(self.objects,self.root/'raw/extracted',self.root/'dist',
             self.root/'raw/model-associations.json',campaign=self.transformer.defaultGameCampaign,
             public_identities={'pony_id','pet_id','costume_id'}, outfit_owners={'costume_id': 'pony_id'},
-            failed_rkms=set(), animation_cache=ANY)
+            animation_cache=ANY)
         self.globals['GameObjectData'].assert_not_called()
         self.transformer.start.assert_called_once()
         self.transformer.save.assert_called_once()
@@ -137,7 +137,7 @@ class Pipeline(unittest.TestCase):
         self.assertFalse((self.root/'raw/extracted/flag.rkm').exists())
         self.globals['generate_images'].assert_called_once()
 
-    def test_rkm_failure_continues_unaffected_generation_without_defaulting_failed_material(self):
+    def test_rkm_extraction_failure_uses_supplied_files_and_native_default(self):
         self.prepare_extraction(mixed=True)
         original = ARK.extract
         def inject(ark, filename, *args, **kwargs):
@@ -148,10 +148,11 @@ class Pipeline(unittest.TestCase):
             self.assertTrue(self.run_build(['download']))
         catalogue = json.loads((self.root/'dist/models_3d.json').read_text())
         report = json.loads((self.root/'raw/model-associations.json').read_text())
-        self.assertEqual(set(catalogue['models']), {'Synthetic_Good'})
-        self.assertEqual(report['generation']['excluded']['Synthetic_Flag']['code'], 'material_extraction_failed')
-        self.assertEqual(report['generation']['failed_rkm_extractions'], ['flag.rkm'])
-        self.assertFalse((self.root/'dist/models/3d/Synthetic_Flag.glb').exists())
+        self.assertEqual(set(catalogue['models']), {'Synthetic_Flag', 'Synthetic_Good'})
+        self.assertFalse((self.root/'raw/extracted/flag.rkm').exists())
+        self.assertTrue((self.root/'dist/models/3d/Synthetic_Flag.glb').is_file())
+        self.assertEqual(report['identities']['Synthetic_Flag']['conversion_provenance']['material_sources'][0]['status'],
+                         'native-default-without-rkm')
         self.assertEqual(report['identities']['Synthetic_Good']['conversion_provenance']['material_sources'][0]['status'],
                          'parsed-source-rkm')
 

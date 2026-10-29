@@ -138,18 +138,18 @@ class AdditionalGeneration(unittest.TestCase):
                       report['generation']['excluded']['Synthetic_Flag']['reason'])
         self.assertFalse((self.dist/'models/3d/Synthetic_Flag.glb').exists())
 
-    def test_child_material_extraction_failure_excludes_parent_but_keeps_ordinary_model(self):
+    def test_invalid_child_material_excludes_parent_but_keeps_ordinary_model(self):
         self.prepare()
         copy_rk_with_material(self.native/'child.rk', self.native/'child.rk', 'child_material')
+        (self.native/'child_material.rkm').write_text('not a material property')
         ordinary = copy.deepcopy(self.objects['Pony']['Synthetic_Flag'])
         ordinary.pop('AdditionalObject')
         self.objects['Pony']['Synthetic_Ordinary'] = ordinary
-        try:
-            report = self.generate(failed_rkms={'child_material.rkm'})
-        except Exception as error:
-            self.fail(f'An isolated child material failure stopped generation: {error}')
+        report = self.generate()
         self.assertEqual(set(self.catalogue()['models']), {'Synthetic_Ordinary'})
-        self.assertEqual(report['generation']['excluded']['Synthetic_Flag']['code'], 'material_extraction_failed')
+        self.assertEqual(report['generation']['excluded']['Synthetic_Flag']['code'], 'NativeInputError')
+        self.assertIn('Invalid or duplicate material properties: child_material.rkm',
+                      report['generation']['excluded']['Synthetic_Flag']['reason'])
         self.assertFalse((self.dist/'models/3d/Synthetic_Flag.glb').exists())
 
 
