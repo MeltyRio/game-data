@@ -258,7 +258,7 @@ def build_cdn(
                 Key = 'luna_kit/ark_keys.json',
                 Bucket = BUCKET,
             )['Body'])
-            for key in reversed[str](existing_keys.values()):
+            for key in reversed(existing_keys.values()):
                 aes_keys.append(bytes.fromhex(key))
         except Exception as e:
             console.print_exception()
