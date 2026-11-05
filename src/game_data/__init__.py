@@ -34,6 +34,7 @@ from .transformer import Transformer
 
 GAME_VERSION_KEY = 'game_version.json'
 GAME_VERSION_CHECKER_KEY = 'game_version_checker/game_version.json'
+GAME_VERSION_CHECKER_PRE_DLC_MANIFEST_KEY = 'game_version_checker/current_dlc_manifest_pre.json'
 GAME_VERSION_CHECKER_DLC_MANIFEST_KEY = 'game_version_checker/current_dlc_manifest.json'
 
 
@@ -216,19 +217,28 @@ def build_cdn(
                 try:
                     last_dlc_manifest_file = s3_client.get_object(
                         Bucket = BUCKET,
-                        Key = GAME_VERSION_CHECKER_DLC_MANIFEST_KEY,
+                        Key = GAME_VERSION_CHECKER_PRE_DLC_MANIFEST_KEY,
                     )
                     last_dlc_manifest = json.load(last_dlc_manifest_file['Body'])
 
                     api = API('android', latest_version)
                     latest_dlc_manifest = api.get_dlc_manifest()
 
-                    if last_dlc_manifest == latest_dlc_manifest:
-                        console.print('[green]All up to date![/]')
-                        return True
-                    else:
+                    if last_dlc_manifest != latest_dlc_manifest:
                         console.print('New content update found!')
                         notifier.notify('content')
+                    else:
+                        last_dlc_manifest_file = s3_client.get_object(
+                            Bucket = BUCKET,
+                            Key = GAME_VERSION_CHECKER_DLC_MANIFEST_KEY,
+                        )
+                        last_dlc_manifest = json.load(last_dlc_manifest_file['Body'])
+
+                        if last_dlc_manifest == latest_dlc_manifest:
+                            console.print('[green]All up to date![/]')
+                            return True
+                        else:
+                            console.print('Failed content update found!')
 
                 except ClientError:
                     console.print('Could not check dlc_manifest')
@@ -333,6 +343,14 @@ def build_cdn(
             Body = json.dumps(latest_dlc_manifest).encode('utf-8'),
             ContentType = 'application/json',
         )
+
+        if success:
+            s3_client.copy_object(
+                Bucket = BUCKET,
+                Key = GAME_VERSION_CHECKER_PRE_DLC_MANIFEST_KEY,
+                CopySource = {'Bucket': BUCKET, 'Key': GAME_VERSION_CHECKER_DLC_MANIFEST_KEY},
+                MetadataDirective = 'COPY',
+            )
     
     console.log(f'Time: {(perf_counter() - start_time) / 60:.2f}m')
 
