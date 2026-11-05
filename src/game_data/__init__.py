@@ -332,7 +332,7 @@ def build_cdn(
             s3_client.copy_object(
                 Bucket = BUCKET,
                 Key = GAME_VERSION_CHECKER_KEY,
-                CopySource = {'Bucket': BUCKET, 'Key': GAME_VERSION_KEY},
+                CopySource = GAME_VERSION_KEY,
                 MetadataDirective = 'COPY',
             )
 
@@ -350,7 +350,7 @@ def build_cdn(
             s3_client.copy_object(
                 Bucket = BUCKET,
                 Key = GAME_VERSION_CHECKER_DLC_MANIFEST_KEY,
-                CopySource = {'Bucket': BUCKET, 'Key': GAME_VERSION_CHECKER_DLC_MANIFEST_KEY},
+                CopySource = GAME_VERSION_CHECKER_PRE_DLC_MANIFEST_KEY,
                 MetadataDirective = 'COPY',
             )
     
