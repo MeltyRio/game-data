@@ -242,7 +242,6 @@ def build_cdn(
 
                 except ClientError:
                     console.print('Could not check dlc_manifest')
-                    notifier.notify('content')
                 
             console.print(f'[green]Found version {version}[/]')
         else:
