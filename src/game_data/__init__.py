@@ -266,7 +266,10 @@ def build_cdn(
 
     else:
         console.print(f'version: {version}')
-        
+    
+
+    console.print('aes keys', [key.hex() for key in aes_keys])
+
 
 
     if 'download' not in skip:
