@@ -339,7 +339,7 @@ def build_cdn(
 
         s3_client.put_object(
             Bucket = BUCKET,
-            Key = GAME_VERSION_CHECKER_DLC_MANIFEST_KEY,
+            Key = GAME_VERSION_CHECKER_PRE_DLC_MANIFEST_KEY,
             Body = json.dumps(latest_dlc_manifest).encode('utf-8'),
             ContentType = 'application/json',
         )
@@ -347,7 +347,7 @@ def build_cdn(
         if success:
             s3_client.copy_object(
                 Bucket = BUCKET,
-                Key = GAME_VERSION_CHECKER_PRE_DLC_MANIFEST_KEY,
+                Key = GAME_VERSION_CHECKER_DLC_MANIFEST_KEY,
                 CopySource = {'Bucket': BUCKET, 'Key': GAME_VERSION_CHECKER_DLC_MANIFEST_KEY},
                 MetadataDirective = 'COPY',
             )
