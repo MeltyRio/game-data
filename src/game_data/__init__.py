@@ -104,7 +104,7 @@ def build_cdn(
 
     success: bool = True
 
-    aes_key: bytes | None = None
+    aes_keys: list[bytes] = []
 
     if BUCKET and s3_client:
         checker_version = get_s3_version(s3_client, BUCKET, GAME_VERSION_CHECKER_KEY)
@@ -181,10 +181,12 @@ def build_cdn(
 
                 try:
                     aes_key = store_manager.fetch_aes_key(Version.parse(latest_version), version_code)
+                    if aes_key:
+                        aes_keys.append(aes_key)
                 except:
                     console.print('[red]Could not get aes key[/]')
 
-                if aes_key is None:
+                if len(aes_keys) == 0:
                     console.print('[yellow]No aes key, the ark files might not be extractable[/]')
                 
             elif pending_version is not None:
@@ -197,12 +199,14 @@ def build_cdn(
                     # The key of the version might not be known yet, get it from the apk again
                     try:
                         aes_key = store_manager.fetch_aes_key(Version.parse(version), version_code)
+                        if aes_key:
+                            aes_keys.append(aes_key)
                     except:
                         console.print('[red]Could not get aes key[/]')
                 else:
                     console.print(f'[yellow]The store has version {latest_version} instead of {version}, the known keys will be used[/]')
 
-                if aes_key is None:
+                if len(aes_keys) == 0:
                     console.print('[yellow]No aes key, the ark files might not be extractable[/]')
             elif version_diff < 0:
                 # The store has an older version than the one we have, do not downgrade
@@ -238,6 +242,18 @@ def build_cdn(
                     console.print('Quitting')
                     return
                 console.print(f'Fetching version: {version}')
+        
+        # Try to fetch existing keys to not rely on fetching from the cdn
+        try:
+            existing_keys = json.load(s3_client.get_object(
+                Key = 'luna_kit/ark_keys.json',
+                Bucket = BUCKET,
+            )['Body'])
+            for key in reversed[str](existing_keys.values()):
+                aes_keys.append(bytes.fromhex(key))
+        except Exception as e:
+            console.print_exception()
+            console.print('[red]Failed to fetch existing keys[/]')
 
     else:
         console.print(f'version: {version}')
@@ -261,7 +277,7 @@ def build_cdn(
     if 'extract' not in skip:
         console.print('Extracting files')
         try:
-            extract(arks_dir, extracted_dir, aes_key = aes_key)
+            extract(arks_dir, extracted_dir, aes_key = aes_keys)
         except:
             console.print_exception()
             console.print('[red]Failed to extract files[/]')
