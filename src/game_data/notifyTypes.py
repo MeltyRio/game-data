@@ -58,12 +58,14 @@ class DiscordConfig(TypedDict):
     webhook: str
     user: DiscordUser
     message: dict[UpdateType, DiscordMessage]
+    disabled: NotRequired[bool]
 
 class NtfyConfig(TypedDict):
     name: str
     token: NotRequired[str]
     topic: str
     message: dict[UpdateType, dict[str, Any]]
+    disabled: NotRequired[bool]
 
 
 class NotificationConfig(TypedDict):
