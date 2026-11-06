@@ -161,7 +161,6 @@ def build_cdn(
 
             if version_diff > 0:
                 console.print(f'New app version found: [yellow]{latest_version}[/]')
-                notifier.notify('app')
 
                 if last_version:
                     last_version.game_version = latest_version
@@ -170,6 +169,8 @@ def build_cdn(
                         game_version = latest_version
                     )
 
+                # Save the detected version before notifying, so that if the build is
+                # interrupted the next run knows this version was already announced.
                 try:
                     s3_client.put_object(
                         Bucket = BUCKET,
@@ -179,6 +180,8 @@ def build_cdn(
                     )
                 except:
                     console.print('[red]Failed to save version[/]')
+
+                notifier.notify('app')
 
                 try:
                     aes_key = store_manager.fetch_aes_key(Version.parse(latest_version), version_code)
@@ -226,6 +229,19 @@ def build_cdn(
 
                     if last_dlc_manifest != latest_dlc_manifest:
                         console.print('New content update found!')
+
+                        # Save the detected manifest before notifying, so that if the build
+                        # is interrupted the next run knows this update was already announced.
+                        try:
+                            s3_client.put_object(
+                                Bucket = BUCKET,
+                                Key = GAME_VERSION_CHECKER_PRE_DLC_MANIFEST_KEY,
+                                Body = json.dumps(latest_dlc_manifest).encode('utf-8'),
+                                ContentType = 'application/json',
+                            )
+                        except:
+                            console.print('[red]Failed to save content version[/]')
+
                         notifier.notify('content')
                     else:
                         last_dlc_manifest_file = s3_client.get_object(
@@ -270,7 +286,21 @@ def build_cdn(
 
     console.print('aes keys', [key.hex() for key in aes_keys])
 
+    if upload and s3_client and BUCKET and latest_dlc_manifest is None:
+        # Record the detected content version before doing any of the build work, so
+        # that an interrupted build does not announce the same update again next run.
+        try:
+            api = API('android', version)
+            latest_dlc_manifest = api.get_dlc_manifest()
 
+            s3_client.put_object(
+                Bucket = BUCKET,
+                Key = GAME_VERSION_CHECKER_PRE_DLC_MANIFEST_KEY,
+                Body = json.dumps(latest_dlc_manifest).encode('utf-8'),
+                ContentType = 'application/json',
+            )
+        except:
+            console.print('[red]Failed to save content version[/]')
 
     if 'download' not in skip:
         shutil.rmtree(arks_dir, ignore_errors = True)
@@ -335,16 +365,6 @@ def build_cdn(
                 CopySource = {'Bucket': BUCKET, 'Key': GAME_VERSION_KEY},
                 MetadataDirective = 'COPY',
             )
-
-        api = API('android', version)
-        latest_dlc_manifest = api.get_dlc_manifest()
-
-        s3_client.put_object(
-            Bucket = BUCKET,
-            Key = GAME_VERSION_CHECKER_PRE_DLC_MANIFEST_KEY,
-            Body = json.dumps(latest_dlc_manifest).encode('utf-8'),
-            ContentType = 'application/json',
-        )
 
         if success:
             s3_client.copy_object(
