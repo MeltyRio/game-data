@@ -78,7 +78,7 @@ class Notifier:
             message_config = ntfy_config['message'].get(type)
             if not message_config:
                 continue
-            if message_config.get('disabled'):
+            if ntfy_config.get('disabled'):
                 console.print(f'Skipping {ntfy_config["name"]}')
                 continue
             
@@ -118,8 +118,8 @@ class Notifier:
             message_config = server['message'].get(type)
             if not message_config or not server.get('webhook'):
                 continue
-            if message_config.get('disabled'):
-                console.print(f'Skipping {ntfy_config["name"]}')
+            if server.get('disabled'):
+                console.print(f'Skipping {server["name"]}')
                 continue
             
             console.print(f'Notifying [yellow]{server['name']}[/]')
