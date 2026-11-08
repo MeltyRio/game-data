@@ -53,7 +53,6 @@ type ObjectOverrides = dict[CategoryName, dict[GameObjectId, ObjectOverride]]
 
 NPC_PONIES = [
     "Pony_Derpy", # derpy box, not playable muffins
-    'Pony_Disguised_Spike',
     "Pony_Chest",
     'Pony_Tirek', # Not the playable tirek
     'Pony_Tirek_TOTB',
@@ -307,11 +306,12 @@ class Transformer:
     def get_category_pony(self):
         ponies = self.game_data.game_objects.pony.objects
 
+        HIDDEN_PONIES: list[str] = []
         
         for hidden_pony in self.gameObjectData['HiddenPony'].values():
             pony_id = hidden_pony.get('Parent', {}).get('PonyName')
-            if pony_id and pony_id not in NPC_PONIES:
-                NPC_PONIES.append(pony_id)
+            if pony_id and pony_id not in HIDDEN_PONIES:
+                HIDDEN_PONIES.append(pony_id)
             
         main_images = self.game_objects_folder/'pony/main'
         portrait_images = self.game_objects_folder/'pony/portrait'
@@ -343,6 +343,8 @@ class Transformer:
                     pony_info.tags.append('unused')
                 if pony.id in NPC_PONIES and 'npc' not in pony_info.tags:
                     pony_info.tags.append('npc')
+                if pony.id in HIDDEN_PONIES and 'hidden' not in pony_info.tags:
+                    pony_info.tags.append('hidden')
                 if pony.id in QUEST_PONIES and 'quest' not in pony_info.tags:
                     pony_info.tags.append('quest')
 
