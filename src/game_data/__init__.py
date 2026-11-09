@@ -37,6 +37,7 @@ from .transformer import Transformer
 
 GAME_VERSION_KEY = 'game_version.json'
 GAME_VERSION_CHECKER_KEY = 'game_version_checker/game_version.json'
+GAME_VERSION_CHECKER_PRE_DLC_MANIFEST_KEY = 'game_version_checker/current_dlc_manifest_pre.json'
 GAME_VERSION_CHECKER_DLC_MANIFEST_KEY = 'game_version_checker/current_dlc_manifest.json'
 
 
@@ -108,7 +109,7 @@ def build_cdn(
     success: bool = True
     model_cache = None
 
-    aes_key: bytes | None = None
+    aes_keys: list[bytes] = []
 
     if BUCKET and s3_client:
         checker_version = get_s3_version(s3_client, BUCKET, GAME_VERSION_CHECKER_KEY)
@@ -164,7 +165,6 @@ def build_cdn(
 
             if version_diff > 0:
                 console.print(f'New app version found: [yellow]{latest_version}[/]')
-                notifier.notify('app')
 
                 if last_version:
                     last_version.game_version = latest_version
@@ -173,6 +173,8 @@ def build_cdn(
                         game_version = latest_version
                     )
 
+                # Save the detected version before notifying, so that if the build is
+                # interrupted the next run knows this version was already announced.
                 try:
                     s3_client.put_object(
                         Bucket = BUCKET,
@@ -183,12 +185,16 @@ def build_cdn(
                 except:
                     console.print('[red]Failed to save version[/]')
 
+                notifier.notify('app')
+
                 try:
                     aes_key = store_manager.fetch_aes_key(Version.parse(latest_version), version_code)
+                    if aes_key:
+                        aes_keys.append(aes_key)
                 except:
                     console.print('[red]Could not get aes key[/]')
 
-                if aes_key is None:
+                if len(aes_keys) == 0:
                     console.print('[yellow]No aes key, the ark files might not be extractable[/]')
                 
             elif pending_version is not None:
@@ -201,12 +207,14 @@ def build_cdn(
                     # The key of the version might not be known yet, get it from the apk again
                     try:
                         aes_key = store_manager.fetch_aes_key(Version.parse(version), version_code)
+                        if aes_key:
+                            aes_keys.append(aes_key)
                     except:
                         console.print('[red]Could not get aes key[/]')
                 else:
                     console.print(f'[yellow]The store has version {latest_version} instead of {version}, the known keys will be used[/]')
 
-                if aes_key is None:
+                if len(aes_keys) == 0:
                     console.print('[yellow]No aes key, the ark files might not be extractable[/]')
             elif version_diff < 0:
                 # The store has an older version than the one we have, do not downgrade
@@ -216,23 +224,44 @@ def build_cdn(
                 try:
                     last_dlc_manifest_file = s3_client.get_object(
                         Bucket = BUCKET,
-                        Key = GAME_VERSION_CHECKER_DLC_MANIFEST_KEY,
+                        Key = GAME_VERSION_CHECKER_PRE_DLC_MANIFEST_KEY,
                     )
                     last_dlc_manifest = json.load(last_dlc_manifest_file['Body'])
 
                     api = API('android', latest_version)
                     latest_dlc_manifest = api.get_dlc_manifest()
 
-                    if last_dlc_manifest == latest_dlc_manifest:
-                        console.print('[green]All up to date![/]')
-                        return True
-                    else:
+                    if last_dlc_manifest != latest_dlc_manifest:
                         console.print('New content update found!')
+
+                        # Save the detected manifest before notifying, so that if the build
+                        # is interrupted the next run knows this update was already announced.
+                        try:
+                            s3_client.put_object(
+                                Bucket = BUCKET,
+                                Key = GAME_VERSION_CHECKER_PRE_DLC_MANIFEST_KEY,
+                                Body = json.dumps(latest_dlc_manifest).encode('utf-8'),
+                                ContentType = 'application/json',
+                            )
+                        except:
+                            console.print('[red]Failed to save content version[/]')
+
                         notifier.notify('content')
+                    else:
+                        last_dlc_manifest_file = s3_client.get_object(
+                            Bucket = BUCKET,
+                            Key = GAME_VERSION_CHECKER_DLC_MANIFEST_KEY,
+                        )
+                        last_dlc_manifest = json.load(last_dlc_manifest_file['Body'])
+
+                        if last_dlc_manifest == latest_dlc_manifest:
+                            console.print('[green]All up to date![/]')
+                            return True
+                        else:
+                            console.print('Failed content update found!')
 
                 except ClientError:
                     console.print('Could not check dlc_manifest')
-                    notifier.notify('content')
                 
             console.print(f'[green]Found version {version}[/]')
         else:
@@ -242,11 +271,40 @@ def build_cdn(
                     console.print('Quitting')
                     return
                 console.print(f'Fetching version: {version}')
+        
+        # Try to fetch existing keys to not rely on fetching from the cdn
+        try:
+            existing_keys = json.load(s3_client.get_object(
+                Key = 'luna_kit/ark_keys.json',
+                Bucket = BUCKET,
+            )['Body'])
+            for key in reversed(existing_keys.values()):
+                aes_keys.append(bytes.fromhex(key))
+        except Exception as e:
+            console.print_exception()
+            console.print('[red]Failed to fetch existing keys[/]')
 
     else:
         console.print(f'version: {version}')
-        
+    
 
+    console.print('aes keys', [key.hex() for key in aes_keys])
+
+    if upload and s3_client and BUCKET and latest_dlc_manifest is None:
+        # Record the detected content version before doing any of the build work, so
+        # that an interrupted build does not announce the same update again next run.
+        try:
+            api = API('android', version)
+            latest_dlc_manifest = api.get_dlc_manifest()
+
+            s3_client.put_object(
+                Bucket = BUCKET,
+                Key = GAME_VERSION_CHECKER_PRE_DLC_MANIFEST_KEY,
+                Body = json.dumps(latest_dlc_manifest).encode('utf-8'),
+                ContentType = 'application/json',
+            )
+        except:
+            console.print('[red]Failed to save content version[/]')
 
     if 'download' not in skip:
         shutil.rmtree(arks_dir, ignore_errors = True)
@@ -265,7 +323,7 @@ def build_cdn(
     if 'extract' not in skip:
         console.print('Extracting files')
         try:
-            extract(arks_dir, extracted_dir, aes_key = aes_key)
+            extract(arks_dir, extracted_dir, aes_key = aes_keys)
         except:
             console.print_exception()
             console.print('[red]Failed to extract files[/]')
@@ -348,15 +406,13 @@ def build_cdn(
                 MetadataDirective = 'COPY',
             )
 
-        api = API('android', version)
-        latest_dlc_manifest = api.get_dlc_manifest()
-
-        s3_client.put_object(
-            Bucket = BUCKET,
-            Key = GAME_VERSION_CHECKER_DLC_MANIFEST_KEY,
-            Body = json.dumps(latest_dlc_manifest).encode('utf-8'),
-            ContentType = 'application/json',
-        )
+        if success:
+            s3_client.copy_object(
+                Bucket = BUCKET,
+                Key = GAME_VERSION_CHECKER_DLC_MANIFEST_KEY,
+                CopySource = {'Bucket': BUCKET, 'Key': GAME_VERSION_CHECKER_PRE_DLC_MANIFEST_KEY},
+                MetadataDirective = 'COPY',
+            )
     
     console.log(f'Time: {(perf_counter() - start_time) / 60:.2f}m')
 

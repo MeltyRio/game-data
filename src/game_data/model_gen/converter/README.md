@@ -112,12 +112,11 @@ not invalidate GLB digests. GLB bytes must reach hosting unchanged.
 
 Luna Kit reads RK geometry and bones, RKM fields, PVR textures and ANIM frames.
 The Luna source revision is declared in game-data `pyproject.toml` and resolved
-in `uv.lock`; this module adds no independent pin or vendored dependency. Local
-provenance names that lock and the `luna_kit.model.RKModel` reader rather than reporting the old
-ATP package's Luna revision. The source temporarily pins the published commit
-from Luna
-[PR #12](https://github.com/ego-lay-atman-bay/luna-kit/pull/12) until its ANIM API
-is merged.
+in `uv.lock`. Local provenance identifies that lock and the
+`luna_kit.model.RKModel` reader. The pinned upstream revision includes the ANIM
+API from merged Luna
+[PR #12](https://github.com/ego-lay-atman-bay/luna-kit/pull/12) and the multi-key
+ARK interface used by the build pipeline.
 
 The caller supplies the complete current extraction closure. An ordinary RKM
 absent from the supplied inputs uses the verified 11.4.3c native material-loader

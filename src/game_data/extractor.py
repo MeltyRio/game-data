@@ -9,7 +9,7 @@ from rich.progress import Progress, TextColumn, BarColumn, MofNCompleteColumn, T
 from glob import glob
 from pathlib import Path
 
-def extract(arks_dir: Path, output: Path, aes_key: bytes | None = None):
+def extract(arks_dir: Path, output: Path, aes_key: bytes | list[bytes] | None = None):
     arks_dir = Path(arks_dir)
     output = Path(output)
 

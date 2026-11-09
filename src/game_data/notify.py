@@ -78,6 +78,9 @@ class Notifier:
             message_config = ntfy_config['message'].get(type)
             if not message_config:
                 continue
+            if ntfy_config.get('disabled'):
+                console.print(f'Skipping {ntfy_config["name"]}')
+                continue
             
             console.print(f'[yellow]ntfy {ntfy_config["name"]}[/]')
             
@@ -114,6 +117,9 @@ class Notifier:
         for server in self.config.get('discord', []):
             message_config = server['message'].get(type)
             if not message_config or not server.get('webhook'):
+                continue
+            if server.get('disabled'):
+                console.print(f'Skipping {server["name"]}')
                 continue
             
             console.print(f'Notifying [yellow]{server['name']}[/]')

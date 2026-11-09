@@ -156,14 +156,16 @@ class Pipeline(unittest.TestCase):
         self.assertEqual(report['identities']['Synthetic_Good']['conversion_provenance']['material_sources'][0]['status'],
                          'parsed-source-rkm')
 
-    def test_extraction_level_failure_stops_before_generation_upload_and_dlc_update(self):
+    def test_extraction_level_failure_keeps_only_prebuild_manifest(self):
         # A failure outside the per-file handler has unknown dependency scope.
         self.prepare_extraction(extra_files={'atlas/broken.texatlas': b'synthetic'})
         client = Mock()
         client.get_object.side_effect = OSError('no previous synthetic version')
         self.globals['os'].environ = {'S3_BUCKET': 'synthetic-local-only'}
         self.globals['get_s3_client'] = Mock(return_value=client)
-        self.globals['API'] = Mock(side_effect=AssertionError('DLC request forbidden'))
+        manifest = {'synthetic': {}}
+        self.globals['API'] = Mock()
+        self.globals['API'].return_value.get_dlc_manifest.return_value = manifest
         original = ARK.extract
 
         def inject(ark, filename, *args, **kwargs):
@@ -182,8 +184,13 @@ class Pipeline(unittest.TestCase):
         self.globals['generate_images'].assert_not_called()
         self.globals['sync'].assert_not_called()
         client.copy_object.assert_not_called()
-        client.put_object.assert_not_called()
-        self.globals['API'].assert_not_called()
+        client.put_object.assert_called_once_with(
+            Bucket='synthetic-local-only',
+            Key=self.globals['GAME_VERSION_CHECKER_PRE_DLC_MANIFEST_KEY'],
+            Body=json.dumps(manifest).encode('utf-8'),
+            ContentType='application/json')
+        self.globals['API'].assert_called_once_with('android', '11.4.3c')
+        self.globals['API'].return_value.get_dlc_manifest.assert_called_once_with()
         self.assertFalse((self.root/'dist/models_3d.json').exists())
 
     def test_non_rkm_failure_keeps_existing_tolerance(self):
