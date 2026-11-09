@@ -25,7 +25,7 @@ def write_fixture(folder: Path) -> None:
     def text(value):
         return value.encode().ljust(64, b"\0")
 
-    # Native upright is negative Y; Rx(pi) in the GLB makes this flag Y-up.
+    # The native flag extends upward along negative Y.
     vertices = [(-.45, 0, 0, 0, 0), (.45, 0, 0, 1, 0),
                 (-.45, -1, 0, 0, .5), (.45, -1, 0, 1, .5),
                 (-.45, -2, 0, 0, 1), (.45, -2, 0, 1, 1)]

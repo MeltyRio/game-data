@@ -26,8 +26,8 @@ class NativeSamplingTests(unittest.TestCase):
         document, binary = unpack(animation_glb(clip))
         sampling = document['extras']['atpClip']['nativeSampling']
         self.assertEqual(set(sampling), {'version', 'translations', 'rotations'})
-        self.assertEqual(sampling['version'], 1)
-        for key, source, width in [('translations', clip.native_translations, 3),
+        self.assertEqual(sampling['version'], 2)
+        for key, source, width in [('translations', -clip.native_translations, 3),
                                    ('rotations', clip.native_rotations_xyzw, 4)]:
             definition = document['accessors'][sampling[key]]
             self.assertEqual((definition['componentType'], definition['type'], definition['count']),

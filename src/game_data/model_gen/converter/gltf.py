@@ -5,7 +5,7 @@ import struct
 import numpy as np
 from numpy.typing import ArrayLike
 from PIL import Image
-from .core import Model, Clip, Rig, require, local_trs, pose_matrices
+from .core import COORDINATE_SYSTEM, NATIVE_TO_GLTF, Model, Clip, Rig, gltf_positions, require, local_trs, pose_matrices
 
 
 class GLB:
@@ -46,10 +46,9 @@ class GLB:
 
 def rig_nodes(g: GLB, rig: Rig, rest: ArrayLike | None = None, scale: float = 1.0) -> list[dict]:
     require(len(rig.parents) == len(rig.names) > 0, 'Invalid rig')
-    # Native upright is -Y. A proper rotation (not reflection) makes the GLB
-    # itself Y-up, including in ordinary glTF viewers; no viewer-side flip.
-    nodes = [{'name': 'ModelRoot', 'scale': [scale]*3, 'rotation': [1,0,0,0], 'children': []}]
+    nodes = [{'name': 'ModelRoot', 'scale': [scale] * 3, 'children': []}]
     t, q = local_trs(rest, rig.parents) if rest is not None else (np.zeros((len(rig.parents), 3)), np.tile([0,0,0,1], (len(rig.parents), 1)))
+    t = gltf_positions(t)
     for i, parent in enumerate(rig.parents):
         require(-1 <= parent < i, 'Invalid rig hierarchy')
         # Matrix decomposition can round a unit component to 1 + one ULP;
@@ -59,7 +58,7 @@ def rig_nodes(g: GLB, rig: Rig, rest: ArrayLike | None = None, scale: float = 1.
         nodes[parent+1 if parent >= 0 else 0].setdefault('children', []).append(i+1)
     g.document.update(nodes=nodes, scenes=[{'nodes': [0]}], scene=0,
                       extras={'atpRig': {'version': 1, 'key': rig.key, 'parents': rig.parents,
-                                         'jointNodes': list(range(1, len(rig.parents)+1)), 'coordinateSystem': 'native-Y-down-to-glTF-Y-up-RxPi'}})
+                                         'jointNodes': list(range(1, len(rig.parents)+1)), 'coordinateSystem': COORDINATE_SYSTEM}})
     return nodes
 
 
@@ -89,7 +88,7 @@ def model_glb(model: Model) -> bytes:
     g.document['extras']['atpModel'] = {'identity': model.name, 'boneNames': model.rig.names}
     if model.wardrobe is not None:
         g.document['extras']['atpWardrobe'] = model.wardrobe
-    attributes = {'POSITION': g.accessor(model.positions, 'VEC3', target=34962, bounds=True),
+    attributes = {'POSITION': g.accessor(gltf_positions(model.positions), 'VEC3', target=34962, bounds=True),
                   'TEXCOORD_0': g.accessor(model.texcoords, 'VEC2', target=34962),
                   'JOINTS_0': g.accessor(joints, 'VEC4', component=5123, target=34962),
                   'WEIGHTS_0': g.accessor(weights, 'VEC4', target=34962),
@@ -157,9 +156,9 @@ def model_glb(model: Model) -> bytes:
         require(idx.ndim == 2 and idx.shape[1] == 3 and len(idx)>0 and np.equal(idx,np.floor(idx)).all() and idx.min() >= 0 and idx.max() < count, 'Invalid triangle indices')
         require(isinstance(p['material'], (int, np.integer)) and not isinstance(p['material'], (bool, np.bool_))
                 and 0 <= p['material'] < len(model.materials), 'Invalid primitive material')
-        # Native RK front-face convention is opposite glTF's CCW convention.
-        # Reversing each triangle preserves the source-visible surface.
-        if p.get('native_back_face', True): idx = idx[:, [0,2,1]]
+        # Changing handedness makes RK's original triangle order front-facing in glTF.
+        if not p.get('native_back_face', True):
+            idx = idx[:, [0, 2, 1]]
         accessor = g.accessor(idx.reshape(-1), 'SCALAR', component=5123 if count < 65536 else 5125, target=34963)
         provenance = {'nativeMeshName': p['name']}
         if 'native_mesh_index' in p: provenance['nativeMeshIndex'] = p['native_mesh_index']
@@ -167,8 +166,9 @@ def model_glb(model: Model) -> bytes:
         primitives.append({'attributes': attributes, 'indices': accessor, 'material': material_index, 'mode': 4, 'extras': provenance})
     require(bool(primitives and model.materials), 'No visible geometry/materials')
     # glTF MAT4 accessors are column-major.
-    inverse = np.linalg.inv(model.bind_global).transpose(0,2,1).reshape(bone_count,16)
-    g.document['skins'] = [{'joints': list(range(1,bone_count+1)), 'inverseBindMatrices': g.accessor(inverse,'MAT4'), 'skeleton': 0}]
+    inverse = NATIVE_TO_GLTF @ np.linalg.inv(model.bind_global) @ NATIVE_TO_GLTF
+    columns = inverse.transpose(0, 2, 1).reshape(bone_count, 16)
+    g.document['skins'] = [{'joints': list(range(1,bone_count+1)), 'inverseBindMatrices': g.accessor(columns,'MAT4'), 'skeleton': 0}]
     if model.interactions is None:
         g.document['meshes'] = [{'name': model.name, 'primitives': primitives}]
         g.document['scenes'][0]['nodes'].append(len(nodes)); nodes.append({'name': 'SkinnedModel', 'mesh': 0, 'skin': 0})
@@ -219,6 +219,7 @@ def animation_glb(clip: Clip) -> bytes:
     require(np.isfinite(clip.fps) and clip.fps > 0 and len(clip.global_frames) > 0, 'Invalid animation rate/length')
     g = GLB(); rig_nodes(g, clip.rig)
     t, q = local_trs(clip.global_frames, clip.rig.parents)
+    t = gltf_positions(t)
     count = len(t)
     # STEP plus a repeated endpoint holds the last native frame for 1/fps.
     times = np.arange(count+1) / clip.fps
@@ -245,8 +246,8 @@ def animation_glb(clip: Clip) -> bytes:
         require(np.allclose(pose_matrices(native_t, native_q), frames_input, rtol=0, atol=2e-5),
                 'Native sampling poses differ from animation frames')
         g.document['extras']['atpClip']['nativeSampling'] = {
-            'version': 1,
-            'translations': g.accessor(native_t.reshape(-1, 3), 'VEC3'),
+            'version': 2,
+            'translations': g.accessor(gltf_positions(native_t).reshape(-1, 3), 'VEC3'),
             'rotations': g.accessor(native_q.reshape(-1, 4), 'VEC4'),
         }
     return g.finish()

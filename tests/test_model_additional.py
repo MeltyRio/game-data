@@ -104,7 +104,7 @@ class AdditionalGeneration(unittest.TestCase):
         old_transform = np.array(before['transform']).reshape(4, 4, order='F')
         new_transform = np.array(after['transform']).reshape(4, 4, order='F')
         np.testing.assert_array_equal(new_transform[:3, :3], old_transform[:3, :3])
-        np.testing.assert_allclose(new_transform[:3, 3] - old_transform[:3, 3], [2., 0., -4.], atol=1e-9)
+        np.testing.assert_allclose(new_transform[:3, 3] - old_transform[:3, 3], [-2., 0., -4.], atol=1e-9)
         proof = report['identities']['Synthetic_Flag']['additional_actor']['conversion_provenance']
         self.assertEqual(proof['rest_root_native'], [2., 3., 4.])
 

@@ -6,10 +6,10 @@ import unittest
 
 import numpy as np
 
-from game_data.model_gen.converter import from_native
+from game_data.model_gen.converter import animation_glb, from_native, model_glb
 from game_data.model_gen.converter.export import convert_native
 from game_data.model_gen.converter.native import NativeInputError, load_native
-from .test_converter import unpack
+from .test_converter import fixture, unpack
 
 from native_fixture import write_fixture
 
@@ -60,14 +60,15 @@ class ExportTests(unittest.TestCase):
         np.testing.assert_array_equal(native['bones'][1]['bind_global'], model.bind_global[1])
         np.testing.assert_array_equal(model.bind_global[1][:3, 3], [0, -1, 0])
         inv = accessor(document, binary, document['skins'][0]['inverseBindMatrices'])
-        np.testing.assert_allclose(model.bind_global @ inv, np.broadcast_to(np.eye(4), (2, 4, 4)))
+        basis = np.diag([-1., -1., -1., 1.])
+        np.testing.assert_allclose(basis @ model.bind_global @ basis @ inv, np.broadcast_to(np.eye(4), (2, 4, 4)))
         attrs = document['meshes'][0]['primitives'][0]['attributes']
         np.testing.assert_array_equal(accessor(document, binary, attrs['TEXCOORD_0']), model.texcoords)
         triangles = accessor(document, binary, document['meshes'][0]['primitives'][0]['indices']).reshape(-1, 3)
-        np.testing.assert_array_equal(triangles, native['primitives'][0]['indices'][:, [0, 2, 1]])
+        np.testing.assert_array_equal(triangles, native['primitives'][0]['indices'])
         # Matrix skinning for the upper flag tip must actually move while root remains fixed.
-        point = np.r_[model.positions[-1], 1]
-        posed = clips[0].global_frames[11, 1] @ inv[1] @ point
+        point = np.r_[accessor(document, binary, attrs['POSITION'])[-1], 1]
+        posed = basis @ clips[0].global_frames[11, 1] @ basis @ inv[1] @ point
         self.assertGreater(abs(posed[0] - point[0]), .1)
         np.testing.assert_allclose(clips[0].global_frames[:, 0], np.broadcast_to(np.eye(4), (46, 4, 4)))
 
@@ -81,6 +82,27 @@ class ExportTests(unittest.TestCase):
         with self.assertRaisesRegex(NativeInputError, 'bone counts differ'):
             self.load()
 
+
+    def test_native_right_up_forward_and_visible_faces(self):
+        model, clip = fixture()
+        model.scale = 2.
+        model.positions[:, 2] = [1., 0, -1., 0]
+        model.primitives.append({**model.primitives[0], 'name': 'rk', 'native_back_face': True})
+        document, binary = unpack(model_glb(model))
+        animation, _ = unpack(animation_glb(clip))
+
+        for glb, scale in ((document, model.scale), (animation, 1.)):
+            root = glb['nodes'][0]
+            self.assertEqual(root['scale'], [scale] * 3)
+            self.assertNotIn('rotation', root)
+        primitives = document['meshes'][0]['primitives']
+        positions = accessor(document, binary, primitives[0]['attributes']['POSITION'])
+        np.testing.assert_array_equal(positions, -model.positions)
+        np.testing.assert_allclose(document['nodes'][1]['translation'], -model.rest_global[0, :3, 3])
+        for primitive, front_z in zip(primitives, (-1, 1), strict=True):
+            indices = accessor(document, binary, primitive['indices']).ravel()[:3]
+            a, b, c = positions[indices]
+            self.assertEqual(np.sign(np.cross(b - a, c - a)[2]), front_z)
 
     def test_source_hash_not_bone_count_is_the_binding_key(self):
         first = self.convert().catalogue['models']['Synthetic_Flag']['rigKey']

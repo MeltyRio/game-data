@@ -59,12 +59,12 @@ class ConverterTest(unittest.TestCase):
         self.assertEqual(d['materials'][0]['alphaMode'], 'BLEND')
         self.assertTrue(d['materials'][0]['doubleSided'])
         self.assertIn('KHR_materials_unlit', d['extensionsUsed'])
-        self.assertEqual(d['nodes'][0]['rotation'], [1, 0, 0, 0])
         self.assertEqual(d['scenes'][0]['nodes'], [0, 3])
         a = d['accessors'][d['skins'][0]['inverseBindMatrices']]
         v = d['bufferViews'][a['bufferView']]
         inv = np.frombuffer(b[v['byteOffset']:v['byteOffset'] + v['byteLength']], '<f4').reshape(2, 4, 4).transpose(0, 2, 1)
-        np.testing.assert_allclose(m.bind_global @ inv, np.eye(4)[None].repeat(2, 0))
+        basis = np.diag([-1., -1., -1., 1.])
+        np.testing.assert_allclose(basis @ m.bind_global @ basis @ inv, np.eye(4)[None].repeat(2, 0))
         for view in d['bufferViews']:
             self.assertEqual(view['byteOffset'] % 4, 0)
         self.assertFalse(any('uri' in image for image in d['images']))

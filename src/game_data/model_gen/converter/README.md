@@ -191,9 +191,10 @@ it does not establish full-generation speed or physical cold-disk performance.
 - Native poses remain global model-space until parent-local TRS is derived and
   its reconstruction checked. Model bind matrices provide the inverse binds;
   animation frames do not replace the model's bind pose.
-- A proper 180-degree X rotation maps native negative-Y-up to glTF positive-Y-up.
-  RK triangles reverse winding for glTF's counterclockwise convention. UVs and
-  decoded texture pixels retain the original converter's behavior.
+- Geometry, joint translations and inverse binds use glTF coordinates. Native
+  right, up and forward (`+X, -Y, -Z`) map to `-X, +Y, +Z`. This change of
+  basis preserves rotations and makes RK triangles front-facing in source index
+  order. A positive skeleton root supports Blender's default armature import.
 - Four native influences are retained without sum normalization, including
   UNORM16 quantization residue. Standard glTF transport merges repeated positive
   joint influences and normalizes a separate copy. Mixed triangles containing zero-weight vertices remain
@@ -205,20 +206,20 @@ it does not establish full-generation speed or physical cold-disk performance.
 - Independent animation GLBs contain no geometry or images. STEP tracks target
   stable indexed joint names as a standard glTF fallback. A repeated final key
   preserves the held final frame and `frameCount / fps` duration.
-- Both GLBs carry an `atpRig` record. Its key includes the native ANIM content
-  digest and indexed parent hierarchy. Consumers compare that key before binding
-  tracks. This check does not establish the native association by itself.
+- Both GLBs carry an `atpRig` record. Its key includes the coordinate system,
+  native ANIM digest and indexed parent hierarchy. Consumers compare that key
+  before binding tracks. This check does not establish the native association by itself.
 
 ### Native frame interpolation
 
 Native conversions additionally emit
-`extras.atpClip.nativeSampling = {version: 1, translations, rotations}`. The
+`extras.atpClip.nativeSampling = {version: 2, translations, rotations}`. The
 last two fields are FLOAT accessor indices: VEC3 model-space positions and VEC4
 decoded XYZW quaternions, respectively. Both contain `frameCount * jointCount`
-entries in frame-major, joint-major order. These are native coordinates, before
-the existing GLB root's Rx(pi) rotation.
+entries in frame-major, joint-major order. Positions use glTF model space.
+Quaternions retain the original sample components, including their lengths.
 
-Version 1 interpolates adjacent model-space positions linearly and quaternions
+Version 2 interpolates adjacent model-space positions linearly and quaternions
 with shortest-path NLERP: negate the second endpoint only when their dot product
 is negative, mix the decoded components, then normalize. **Do not normalize the
 endpoints before mixing:** compressed native quaternions retain small length

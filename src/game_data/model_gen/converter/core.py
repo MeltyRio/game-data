@@ -1,8 +1,7 @@
 """Small intermediate representation and validated coordinate conversion.
 
-Column vectors in native coordinates (head toward negative Y). Global poses
-become local TRS; the GLB skeleton root applies Rx(pi) to glTF Y-up. No archive,
-webpage, save, or PonyVista dependencies.
+Global poses become parent-local TRS in native coordinates. Serialization maps
+native right, up and forward (+X, -Y, -Z) to glTF (-X, +Y, +Z).
 """
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -11,6 +10,16 @@ import json
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 from .native_animation import NativeClip
+
+
+COORDINATE_SYSTEM = 'glTF'
+NATIVE_TO_GLTF = np.diag([-1., -1., -1., 1.])
+
+
+def gltf_positions(native: ArrayLike) -> NDArray[np.float64]:
+    # The -I basis negates positions and translations. Conjugating a rotation
+    # by -I gives the same rotation, including for native quaternion sampling.
+    return np.negative(native, dtype=np.float64)
 
 
 class ConversionError(ValueError):
@@ -64,7 +73,7 @@ def rig_from_native(native: dict) -> Rig:
     anim_source = native['provenance']['animation_sha256']
     # This token certifies a declared source library plus its indexed hierarchy,
     # never mere equal names or bone counts. Bind matrices are model-specific.
-    signature = ['native-global-to-gltf-rx-pi-v1', anim_source, parents]
+    signature = [COORDINATE_SYSTEM, anim_source, parents]
     key = hashlib.sha256(json.dumps(signature, separators=(',', ':')).encode()).hexdigest()
     names = [bone['name'] for bone in native['bones']]
     return Rig(key, parents, names)

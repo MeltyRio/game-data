@@ -57,8 +57,8 @@ claim; source, numeric and browser checks have narrower scopes.
 
 ## Coordinates
 
-Both generated GLBs use scale 1 and rotate native Y-down to GLTF Y-up with
-`C = diag(1, -1, -1, 1)`. The child's placement is independent of the parent GLB's
+Both generated GLBs use unit scale and the same native-to-glTF basis
+`C = diag(-1, -1, -1, 1)`. The child's placement is independent of the parent GLB's
 skeleton. The native `Model.RootBone` name must match exactly one parent joint.
 The public `parentRoot` is that zero-based native joint ordinal, not a GLTF node
 index; the client resolves it through `atpRig.jointNodes`.
@@ -110,8 +110,8 @@ inherited by the child. Camera orbit rotates the view of the entire scene; it
 does not change the native constructor-heading reference.
 
 The generator obtains the exact rest root by accumulating the already validated
-parent GLB's local joint transforms, excluding the GLB `ModelRoot` coordinate
-rotation. It does not read the native binary a second time or guess a root by name
+parent GLB's local joint transforms and taking the resulting position back
+to native coordinates. It does not read the native binary a second time or guess a root by name
 prefix, index zero or bone count.
 
 ## Publication and viewer contract

@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from .converter.core import pose_matrices
+from .converter.core import COORDINATE_SYSTEM, NATIVE_TO_GLTF, pose_matrices
 from .converter.export import convert_native
 from .converter.csv import read_clips
 from .converter.animation_cache import AnimationCache
@@ -92,9 +92,8 @@ def prepare_additional_actor(obj: GameObject, owner_association: dict, report: d
 def _native_rest_root(bundle: AssetBundle, identity: str, root_name: str | None) -> tuple[int, np.ndarray]:
     """Recover an exact native joint ordinal/global pose from our verified GLB.
 
-    The serializer preserves native bone names and emits local joint transforms
-    below ModelRoot. Accumulating those joints without ModelRoot's Rx(pi)
-    recovers native coordinates; no RK/ANIM parser or name heuristic is added.
+    The serializer preserves native bone names. Accumulate the local joint
+    transforms, then recover the native position for the attachment formula.
     """
     _require(isinstance(root_name, str) and bool(root_name), 'A declared Model.RootBone is required')
     row = bundle.catalogue['models'][identity]
@@ -110,8 +109,8 @@ def _native_rest_root(bundle: AssetBundle, identity: str, root_name: str | None)
     _require(rig['key'] == row['rigKey'] and len(names) == len(rig['parents']) == len(rig['jointNodes']),
              'Generated owner rig metadata differs')
     coordinate_root = document['nodes'][0]
-    _require(coordinate_root.get('scale') == [1., 1., 1.] and coordinate_root.get('rotation') == [1, 0, 0, 0],
-             'AdditionalObject requires the current scale-one Rx(pi) model coordinates')
+    _require(rig['coordinateSystem'] == COORDINATE_SYSTEM and coordinate_root.get('scale') == [1., 1., 1.]
+             and 'rotation' not in coordinate_root, 'AdditionalObject requires a unit-scale glTF model')
     nodes = [document['nodes'][node] for node in rig['jointNodes']]
     _require(all(node.get('scale', [1, 1, 1]) == [1, 1, 1] and 'matrix' not in node for node in nodes),
              'Unsupported generated joint transform')
@@ -121,7 +120,7 @@ def _native_rest_root(bundle: AssetBundle, identity: str, root_name: str | None)
         _require(type(parent) is int and -1 <= parent < index, 'Invalid generated joint hierarchy')
         if parent >= 0:
             local[index] = local[parent] @ local[index]
-    return ordinal, local[ordinal, :3, 3]
+    return ordinal, -local[ordinal, :3, 3]
 
 
 def _native_y(angle: float) -> np.ndarray:
@@ -155,10 +154,8 @@ def attach_additional_actor(obj: GameObject, owner_bundle: AssetBundle, identity
     native[:3, :3] = (child_scale / owner_scale) * rotation.T @ child_rotation
     native[:3, 3] = np.array([root[0], 0., root[2]]) + rotation.T @ np.array(
         [offset_x - 4., offset_y + 64., 0.]) / owner_scale
-    # Both current GLBs use scale=1 and Rx(pi). Scale occurs once in the
-    # relative world bases, never by rescaling the already serialized mesh.
-    coordinates = np.diag([1., -1., -1., 1.])
-    matrix = coordinates @ native @ coordinates
+    # Express the native child-to-parent transform in the shared GLB basis.
+    matrix = NATIVE_TO_GLTF @ native @ NATIVE_TO_GLTF
     _require(np.isfinite(matrix).all() and abs(np.linalg.det(matrix[:3, :3])) > 1e-12,
              'Invalid AdditionalObject relative transform')
     public = {'model': child_row, 'transform': matrix.T.reshape(-1).tolist(),
