@@ -11,10 +11,32 @@ In a `.env` file, or just setting these environment variables, you can configure
 ```shell
 S3_ENDPOINT=http://localhost:3000
 S3_ACCESS_KEY=testing
-S3_SECRET_KEY=testing
+S3_SECRET_KEY=testing123
 S3_REGION=us-east-1
 S3_BUCKET=all-the-ponies-assets
 ```
+
+To run a local S3 server, use the included `compose.yaml`, which starts [Silo](https://silo.pgsty.com/), a local s3 server.
+
+```shell
+docker compose up -d
+```
+
+To stop the local S3 server:
+
+```shell
+docker compose down
+```
+
+To delete the local S3 server data
+
+```shell
+docker compose down -v
+```
+
+The S3 API is available at http://localhost:3000 and the console at http://localhost:3001. Data is stored in the `atp-silo-data` volume; `docker compose down -v` removes it.
+
+The `silo-init` service creates the `all-the-ponies-assets` bucket and grants anonymous read-only access to it, so uploaded objects can be fetched without credentials, for example http://localhost:3000/all-the-ponies-assets/game_version.json. Set `S3_BUCKET` to use a different bucket name, or `SILO_PUBLIC_ACCESS=public` to allow anonymous writes as well.
 
 To use notifications, use `notifications-example.json` to create the notifications config. Place it in either `notifications.dev.json` for running it in the dev environment, or `notifications.json` for production.
 
@@ -53,7 +75,7 @@ The login config will be saved to `.playstoreapi`. You may also upload this to a
 ```shell
 PRIVATE_S3_ENDPOINT=http://localhost:3000
 PRIVATE_S3_ACCESS_KEY=testing
-PRIVATE_S3_SECRET_KEY=testing
+PRIVATE_S3_SECRET_KEY=testing123
 PRIVATE_S3_REGION=us-east-1
 PRIVATE_S3_BUCKET=private-bucket
 ```
