@@ -1,0 +1,44 @@
+services:
+  silo:
+    image: docker.io/pgsty/silo:RELEASE.2026-11-12T00-00-00Z
+    command: server /data --console-address ":9001"
+    restart: unless-stopped
+    ports:
+      - "${SILO_API_PORT:-3000}:9000"
+      - "${SILO_CONSOLE_PORT:-3001}:9001"
+    environment:
+      # Keep the defaults in sync with .env.dev
+      MINIO_ROOT_USER: ${SILO_ROOT_USER:-testing}
+      MINIO_ROOT_PASSWORD: ${SILO_ROOT_PASSWORD:-testing123}
+      MINIO_UPDATE: "off"
+    volumes:
+      - atp-silo-data:/data
+    healthcheck:
+      test: ["CMD", "silo", "healthcheck", "ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  silo-init:
+    image: docker.io/pgsty/silo:RELEASE.2026-11-12T00-00-00Z
+    restart: "no"
+    depends_on:
+      silo:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        mcli alias set local "http://silo:9000" "$$SILO_ROOT_USER" "$$SILO_ROOT_PASSWORD" >/dev/null
+        mcli mb --ignore-existing "local/$$SILO_PUBLIC_BUCKET"
+        mcli anonymous set "$$SILO_PUBLIC_ACCESS" "local/$$SILO_PUBLIC_BUCKET"
+    environment:
+      SILO_ROOT_USER: ${SILO_ROOT_USER:-testing}
+      SILO_ROOT_PASSWORD: ${SILO_ROOT_PASSWORD:-testing123}
+      SILO_PUBLIC_BUCKET: ${S3_BUCKET:-all-the-ponies-assets}
+      # "download" grants anonymous read-only access; use "public" for read/write
+      SILO_PUBLIC_ACCESS: ${SILO_PUBLIC_ACCESS:-download}
+
+volumes:
+  atp-silo-data:
