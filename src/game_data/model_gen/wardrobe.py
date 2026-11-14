@@ -114,6 +114,45 @@ def resolve_set_parts(outfit: GameObject, parts: dict[str, GameObject]) -> tuple
 
 def resolve_wardrobe(owner: GameObject, game_objects: GameObjectData, *,
                      outfit_id: str | None = None) -> dict | None:
+    """Keep every verified set registered for the exact same native model.
+
+    The owner's first set remains its default. Shared sets are resource choices,
+    not additional ownership registrations for that pony.
+    """
+    resolved = _resolve_registered_wardrobe(owner, game_objects, outfit_id=outfit_id)
+    model = owner.get('Model', {}).get('MediumLOD')
+    if resolved is None or not model:
+        return resolved
+    shared = []
+    for identity, other in game_objects.get('Pony', {}).items():
+        if other is owner or other.get('Model', {}).get('MediumLOD') != model:
+            continue
+        try:
+            candidate = _resolve_registered_wardrobe(other, game_objects)
+        except WardrobeError:
+            # Invalid peers retain their own source diagnostics without poisoning a valid actor.
+            continue
+        if candidate is not None:
+            shared.append((identity, candidate['provenance']))
+    if not shared:
+        return resolved
+    base = resolved['provenance']
+    ids, parts, choices = list(base['set_ids']), dict(base['parts']), dict(base['sets'])
+    alternatives = list(base['alternative_only_sets'])
+    for _, other in shared:
+        ids.extend(identity for identity in other['set_ids'] if identity not in ids)
+        parts.update(other['parts'])
+        choices.update(other['sets'])
+        alternatives.extend(identity for identity in other['alternative_only_sets'] if identity not in alternatives)
+    selected = {slot: parts[identity]['mesh'] for slot, identity in base['selected_slots'].items()}
+    return {'mesh_visibility': _mesh_visibility(parts.values(), selected),
+            'provenance': {**base, 'set_ids': ids, 'part_ids': sorted(parts), 'parts': parts,
+                           'sets': choices, 'alternative_only_sets': alternatives,
+                           'shared_model': {'resource': model, 'sources': [identity for identity, _ in shared]}}}
+
+
+def _resolve_registered_wardrobe(owner: GameObject, game_objects: GameObjectData, *,
+                                outfit_id: str | None = None) -> dict | None:
     """Return slot choices and exact mesh controls, without reading RK files.
 
     A requested outfit starts from native default slots and applies its explicit
@@ -140,12 +179,7 @@ def resolve_wardrobe(owner: GameObject, game_objects: GameObjectData, *,
     selected = dict(defaults)
     if outfit_id is not None:
         selected.update(choices[outfit_id][1])
-    visibility = {}
-    for item in controls:
-        shown = item['mesh'] == selected[item['slot']]['mesh']
-        if item['mesh'] in visibility and visibility[item['mesh']] != shown:
-            _fail('conflicting_wardrobe_mesh_visibility', 'Same mesh has incompatible slot visibility: ' + item['mesh'])
-        visibility[item['mesh']] = shown
+    visibility = _mesh_visibility(controls, {slot: item['mesh'] for slot, item in selected.items()})
     return {'mesh_visibility': visibility,
             'provenance': {'set_ids': ids, 'part_ids': sorted(used_parts),
                            'default_set': ids[0], 'outfit_id': outfit_id,
@@ -158,6 +192,16 @@ def resolve_wardrobe(owner: GameObject, game_objects: GameObjectData, *,
                                if sets[sid].get('PonySet', {}).get('IsOnlyAlternativeMesh')],
                            'rule': 'first native set defaults; requested outfit explicit parts and one LinkedPart override defaults',
                            'context': 'complete-outfit viewer policy; no saved player equipment'}}
+
+
+def _mesh_visibility(parts, selected: dict[str, str]) -> dict[str, bool]:
+    visibility = {}
+    for item in parts:
+        shown = item['mesh'] == selected[item['slot']]
+        if item['mesh'] in visibility and visibility[item['mesh']] != shown:
+            _fail('conflicting_wardrobe_mesh_visibility', 'Same mesh has incompatible slot visibility: ' + item['mesh'])
+        visibility[item['mesh']] = shown
+    return visibility
 
 
 def interactive_wardrobe(resolved: dict, mesh_names: list[str]) -> dict:

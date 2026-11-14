@@ -522,3 +522,43 @@ def select_native_view(category: str, obj: GameObject, game_objects: GameObjectD
             'requested': display_profile, 'selected': 'world-preview',
             'ponybook_unavailable': {'code': error.code, 'reason': str(error)}}
         return world
+
+
+def resolve_outfit_eye_owner(outfit_id: str, preferred: str, owners: list[str],
+                            game_objects: GameObjectData, mesh_names: list[str]) -> str:
+    """Resolve stale eye controls independently of the model's shared wardrobe.
+
+    The public single-owner link can refer to a duplicate with stale eye names
+    in a shared RK. Native registrations remain authoritative; no wearer is
+    inferred from a name or NPC tag, and this choice never discards other sets.
+    """
+    if len(owners) < 2:
+        return preferred
+    ponies = game_objects['Pony']
+    requested = ponies[preferred]
+    resource = (requested.get('Model', {}).get('MediumLOD'),
+                requested.get('Animation', {}).get('Rig_MediumLOD'))
+    names = set(mesh_names)
+    contexts = {}
+    for identity in owners:
+        owner = ponies[identity]
+        if (owner.get('Model', {}).get('MediumLOD'),
+                owner.get('Animation', {}).get('Rig_MediumLOD')) != resource:
+            continue
+        try:
+            _, controlled_eyes, _ = _eyes(owner, game_objects, names)
+        except SelectionError:
+            if identity == preferred:
+                raise
+            continue
+        contexts[identity] = controlled_eyes
+    if len(contexts) < 2:
+        return preferred
+    eye_meshes = set().union(*contexts.values())
+    complete = [identity for identity, coverage in contexts.items() if eye_meshes <= coverage]
+    if preferred in complete:
+        return preferred
+    if len(complete) != 1:
+        _fail('ambiguous_outfit_eye_context',
+              'Shared outfit has no unique complete native eye context: ' + outfit_id)
+    return complete[0]

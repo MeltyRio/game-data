@@ -115,9 +115,10 @@ class ModelGeneration(unittest.TestCase):
         self.assertEqual(set(report['generation']['excluded']), {'Synthetic_Broken'})
         self.assertIn('malformed native record', report['generation']['excluded']['Synthetic_Broken']['reason'])
 
-    def prepare_wardrobe(self, *, linked_tail=True, second_owner=False):
+    def prepare_wardrobe(self, *, linked_tail=True, second_owner=False, extra_mesh_names=()):
         """Self-authored, distinct native meshes plus real Luna-parsed tables."""
         names = ['flag', 'body0', 'body1', 'mane0', 'tail0', 'tail1', 'uncontrolled_trim']
+        names.extend(extra_mesh_names)
         source = (self.native/'flag.rk').read_bytes()
         sections = []
         for index in range(24):

@@ -1,15 +1,17 @@
-"""Owner-scoped wardrobe assets keep existing previews and upload closure."""
+"""Shared-model wardrobe assets keep defaults, every set and upload closure."""
 import copy
 import hashlib
 import json
 import struct
 import unittest
 from unittest.mock import patch
+from xml.etree import ElementTree as ET
 
 from bootstrap import ROOT
 from game_data import model_gen
 from game_data.model_paths import asset_digest, is_asset_path
 from game_data.model_gen.wardrobe import resolve_wardrobe
+from luna_kit.gameobjectdata import GameObjectData
 import test_model_generation as generation_fixture
 from test_model_sync import load_sync, MemoryClient
 
@@ -24,6 +26,190 @@ class WardrobeAssets(unittest.TestCase):
     generate = generation_fixture.ModelGeneration.generate
     catalogue = generation_fixture.ModelGeneration.catalogue
     prepare_wardrobe = generation_fixture.ModelGeneration.prepare_wardrobe
+
+    def prepare_partial_owner(self):
+        self.prepare_wardrobe(second_owner=True)
+        path = self.native/'gameobjectdata.xml'
+        tree = ET.parse(path)
+        sets = tree.find("./Category[@ID='Pony']/GameObject[@ID='Synthetic_Flag']/Sets/Sets")
+        ET.SubElement(sets, 'Item', Value='Synthetic_OtherOutfit')
+        outfit = ET.SubElement(tree.find("./Category[@ID='PonySet']"), 'GameObject', ID='Synthetic_OtherOutfit')
+        ET.SubElement(outfit, 'Parts', Body='other_body', Mane='', Tail='')
+        ET.SubElement(ET.SubElement(outfit, 'PonySet'), 'SubSets')
+        part = ET.SubElement(tree.find("./Category[@ID='PonyPart']"), 'GameObject', ID='other_body')
+        ET.SubElement(part, 'PonyPart', Type='Body', ModelName='uncontrolled_trim', LinkedPart='')
+        tree.write(path, encoding='utf-8')
+        self.objects = GameObjectData(path, self.native/'shopdata.xml', self.native/'gameobjectcategorydata.xml')
+
+    def test_shared_costume_keeps_its_public_owner_without_extra_clothing(self):
+        self.prepare_partial_owner()
+        report = self.generate(public_identities={'Synthetic_Outfit'},
+            outfit_owners={'Synthetic_Outfit':'Synthetic_SecondOwner'})
+
+        data = (self.dist/self.catalogue()['models']['Synthetic_Outfit']['path']).read_bytes()
+        glb = document(data)
+        names = {primitive['extras']['nativeMeshName'] for mesh in glb['meshes'] for primitive in mesh['primitives']}
+        self.assertEqual(names, {'flag', 'body1', 'mane0', 'tail1'})
+        row = report['identities']['Synthetic_Outfit']
+        self.assertEqual(row['owners'], ['Synthetic_Flag', 'Synthetic_SecondOwner'])
+        self.assertEqual(row['owner'], 'Synthetic_SecondOwner')
+        self.assertEqual(row['owner_source'], 'public.costume.pony')
+
+    def test_shared_costume_uses_an_owner_whose_eye_controls_resolve(self):
+        for matching_open in [False, True]:
+            with self.subTest(matching_open=matching_open):
+                self.prepare_wardrobe(second_owner=True,
+                    extra_mesh_names=['eyes_open', 'eyes_shut', 'eyes_happy', 'eyes_frown'])
+                path = self.native/'gameobjectdata.xml'
+                tree = ET.parse(path)
+                for identity in ['Synthetic_Flag', 'Synthetic_SecondOwner']:
+                    eyes = tree.find(f"./Category[@ID='Pony']/GameObject[@ID='{identity}']/Eyes")
+                    for state, mesh in [('Open','eyes_open'), ('Closed','eyes_shut'), ('Happy','eyes_happy'), ('Frown','eyes_frown')]:
+                        group = eyes.find('EyeSubObject_' + state)
+                        group.clear()
+                        stale = identity == 'Synthetic_SecondOwner' and (state != 'Open' or not matching_open)
+                        ET.SubElement(group, 'Item', Value=('stale_' if stale else '') + mesh)
+                tree.write(path, encoding='utf-8')
+                self.objects = GameObjectData(path, self.native/'shopdata.xml', self.native/'gameobjectcategorydata.xml')
+
+                report = self.generate(public_identities={'Synthetic_Outfit'},
+                    outfit_owners={'Synthetic_Outfit':'Synthetic_SecondOwner'})
+
+                glb = document((self.dist/self.catalogue()['models']['Synthetic_Outfit']['path']).read_bytes())
+                shown = {glb['nodes'][index]['mesh'] for index in glb['scenes'][0]['nodes'] if 'mesh' in glb['nodes'][index]}
+                names = {primitive['extras']['nativeMeshName'] for index in shown for primitive in glb['meshes'][index]['primitives']}
+                self.assertEqual(names, {'flag', 'body1', 'mane0', 'tail1', 'uncontrolled_trim', 'eyes_open'})
+                self.assertEqual(report['identities']['Synthetic_Outfit']['owner'], 'Synthetic_Flag')
+
+    def test_equivalent_eyeless_contexts_keep_the_public_owner(self):
+        self.prepare_wardrobe(second_owner=True)
+        path = self.native/'gameobjectdata.xml'
+        tree = ET.parse(path)
+        for identity in ['Synthetic_Flag', 'Synthetic_SecondOwner']:
+            opened = tree.find(f"./Category[@ID='Pony']/GameObject[@ID='{identity}']/Eyes/EyeSubObject_Open/Item")
+            opened.set('Value', 'missing_eye')
+        tree.write(path, encoding='utf-8')
+        self.objects = GameObjectData(path, self.native/'shopdata.xml', self.native/'gameobjectcategorydata.xml')
+        report = self.generate(public_identities={'Synthetic_Unrelated', 'Synthetic_Outfit'},
+            outfit_owners={'Synthetic_Outfit':'Synthetic_SecondOwner'})
+        self.assertIn('Synthetic_Outfit', self.catalogue()['models'])
+        self.assertEqual(report['identities']['Synthetic_Outfit']['owner'], 'Synthetic_SecondOwner')
+
+    def test_shared_context_does_not_bypass_public_or_render_owner_overrides(self):
+        self.prepare_partial_owner()
+        self.objects['Pony']['Synthetic_SecondOwner']['Eyes']['EyeSubObject_Open'] = ['missing_eye']
+        for identity in ['Synthetic_SecondOwner', 'Synthetic_Flag']:
+            with self.subTest(identity=identity):
+                report = self.generate(public_identities={'Synthetic_Unrelated', 'Synthetic_Outfit'},
+                    outfit_owners={'Synthetic_Outfit':'Synthetic_SecondOwner'},
+                    campaign={'game_object_data':{'Pony':{identity:{'Model':{'MediumLOD':'changed'}}}}})
+                self.assertNotIn('Synthetic_Outfit', self.catalogue()['models'])
+                self.assertEqual(report['generation']['excluded']['Synthetic_Outfit']['code'],
+                                 'campaign_visual_override_unverified')
+
+    def test_shared_context_preserves_specific_wardrobe_diagnostics(self):
+        self.prepare_wardrobe(second_owner=True)
+        self.objects['PonySet']['Synthetic_DefaultSet']['Parts']['Mane'] = ''
+        report = self.generate(public_identities={'Synthetic_Unrelated', 'Synthetic_Outfit'},
+            outfit_owners={'Synthetic_Outfit':'Synthetic_SecondOwner'})
+        self.assertEqual(report['generation']['excluded']['Synthetic_Outfit']['code'],
+                         'incomplete_default_wardrobe')
+
+    def test_shared_costume_preserves_a_complete_public_owner(self):
+        self.prepare_wardrobe(second_owner=True)
+        report = self.generate(public_identities={'Synthetic_Outfit'},
+            outfit_owners={'Synthetic_Outfit':'Synthetic_SecondOwner'})
+        row = report['identities']['Synthetic_Outfit']
+        self.assertEqual(row['owner'], 'Synthetic_SecondOwner')
+        self.assertEqual(row['owner_source'], 'public.costume.pony')
+
+    def test_shared_model_keeps_all_sets_and_only_its_first_default_visible(self):
+        self.prepare_partial_owner()
+        report = self.generate(public_identities={'Synthetic_Flag', 'Synthetic_SecondOwner'})
+        for identity in ['Synthetic_Flag', 'Synthetic_SecondOwner']:
+            with self.subTest(identity=identity):
+                row = self.catalogue()['models'][identity]
+                glb = document((self.dist/row['path']).read_bytes())
+                shown = {glb['nodes'][index]['mesh'] for index in glb['scenes'][0]['nodes'] if 'mesh' in glb['nodes'][index]}
+                if shown:
+                    meshes = [glb['meshes'][index] for index in shown]
+                else:
+                    meshes = glb['meshes']
+                names = {primitive['extras']['nativeMeshName'] for mesh in meshes for primitive in mesh['primitives']}
+                self.assertEqual(names, {'flag', 'body0', 'mane0', 'tail0'})
+                wardrobe = document((self.dist/row['wardrobe']['path']).read_bytes())['extras']['atpWardrobe']
+                self.assertEqual(set(wardrobe['sets']), {'Synthetic_DefaultSet','Synthetic_Outfit','Synthetic_OtherOutfit'})
+                self.assertEqual(wardrobe['defaults'], {'Body':'body0','Mane':'mane0','Tail':'tail0'})
+                self.assertEqual(report['identities'][identity]['selection']['wardrobe']['default_set'], 'Synthetic_DefaultSet')
+
+    def test_same_model_unions_disjoint_sets_without_replacing_an_owner(self):
+        self.prepare_partial_owner()
+        path = self.native/'gameobjectdata.xml'
+        tree = ET.parse(path)
+        first = tree.find("./Category[@ID='Pony']/GameObject[@ID='Synthetic_Flag']/Sets/Sets")
+        first.remove(list(first)[-1])
+        second = tree.find("./Category[@ID='Pony']/GameObject[@ID='Synthetic_SecondOwner']/Sets/Sets")
+        list(second)[1].set('Value', 'Synthetic_OtherOutfit')
+        tree.write(path, encoding='utf-8')
+        self.objects = GameObjectData(path, self.native/'shopdata.xml', self.native/'gameobjectcategorydata.xml')
+        report = self.generate(public_identities={'Synthetic_Flag','Synthetic_SecondOwner','Synthetic_Outfit'},
+            outfit_owners={'Synthetic_Outfit':'Synthetic_Flag'})
+        for identity in ['Synthetic_Flag','Synthetic_SecondOwner']:
+            row = self.catalogue()['models'][identity]
+            profile = document((self.dist/row['wardrobe']['path']).read_bytes())['extras']['atpWardrobe']
+            self.assertEqual(set(profile['sets']), {'Synthetic_DefaultSet','Synthetic_Outfit','Synthetic_OtherOutfit'})
+            glb = document((self.dist/row['path']).read_bytes())
+            names = {p['extras']['nativeMeshName'] for mesh in glb['meshes'] for p in mesh['primitives']}
+            self.assertEqual(names, {'flag','body0','mane0','tail0'})
+        self.assertEqual(report['identities']['Synthetic_Outfit']['owner'], 'Synthetic_Flag')
+
+    def test_shared_model_sets_do_not_depend_on_animation_library_identity(self):
+        self.prepare_partial_owner()
+        for suffix in ['anim','csv']:
+            (self.native/f'other.{suffix}').write_bytes((self.native/f'flag.{suffix}').read_bytes())
+        self.objects['Pony']['Synthetic_SecondOwner']['Animation']['Rig_MediumLOD'] = 'other'
+        self.generate(public_identities={'Synthetic_SecondOwner'})
+        row = self.catalogue()['models']['Synthetic_SecondOwner']
+        profile = document((self.dist/row['wardrobe']['path']).read_bytes())['extras']['atpWardrobe']
+        self.assertEqual(set(profile['sets']), {'Synthetic_DefaultSet','Synthetic_Outfit','Synthetic_OtherOutfit'})
+
+    def test_shared_sets_keep_cross_slot_mesh_conflict_checks(self):
+        self.prepare_partial_owner()
+        path = self.native/'gameobjectdata.xml'
+        tree = ET.parse(path)
+        first = tree.find("./Category[@ID='Pony']/GameObject[@ID='Synthetic_Flag']/Sets/Sets")
+        first.remove(list(first)[-1])
+        second = tree.find("./Category[@ID='Pony']/GameObject[@ID='Synthetic_SecondOwner']/Sets/Sets")
+        second.clear()
+        for identity in ['Foreign_Default','Synthetic_OtherOutfit']:ET.SubElement(second,'Item',Value=identity)
+        default = ET.SubElement(tree.find("./Category[@ID='PonySet']"),'GameObject',ID='Foreign_Default')
+        ET.SubElement(default,'Parts',Body='body0',Mane='foreign_mane',Tail='tail0')
+        ET.SubElement(ET.SubElement(default,'PonySet'),'SubSets')
+        part = ET.SubElement(tree.find("./Category[@ID='PonyPart']"),'GameObject',ID='foreign_mane')
+        ET.SubElement(part,'PonyPart',Type='Mane',ModelName='uncontrolled_trim',LinkedPart='')
+        tree.find("./Category[@ID='PonyPart']/GameObject[@ID='other_body']/PonyPart").set('ModelName','mane0')
+        tree.write(path,encoding='utf-8')
+        self.objects = GameObjectData(path,self.native/'shopdata.xml',self.native/'gameobjectcategorydata.xml')
+        report = self.generate(public_identities={'Synthetic_Flag','Synthetic_Unrelated'})
+        self.assertNotIn('Synthetic_Flag',self.catalogue()['models'])
+        self.assertEqual(report['generation']['excluded']['Synthetic_Flag']['code'],
+                         'conflicting_wardrobe_mesh_visibility')
+
+    def test_shared_registration_checks_only_the_contributing_fields(self):
+        self.prepare_partial_owner()
+        for change, blocked in [({'Model':{'MediumLOD':'different'}},True),
+                                ({'Sets':{'Sets':['Synthetic_DefaultSet']}},True),
+                                ({'Model':{'Scale':2}},False),
+                                ({'Animation':{'LeftIdleAnimationList':['rest']}},False),
+                                ({'Eyes':{'EyeSubObject_Open':['missing_eye']}},False)]:
+            with self.subTest(change=change):
+                report = self.generate(public_identities={'Synthetic_SecondOwner','Synthetic_Unrelated'},
+                    campaign={'game_object_data':{'Pony':{'Synthetic_Flag':change}}})
+                if blocked:
+                    self.assertNotIn('Synthetic_SecondOwner',self.catalogue()['models'])
+                    self.assertEqual(report['generation']['excluded']['Synthetic_SecondOwner']['code'],
+                                     'campaign_visual_override_unverified')
+                else:self.assertIn('Synthetic_SecondOwner',self.catalogue()['models'])
 
     def test_owner_bundle_preserves_normal_preview_and_shared_animations(self):
         self.prepare_wardrobe()

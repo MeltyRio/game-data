@@ -18,7 +18,7 @@ from ..model_paths import asset_digest, is_asset_path, model_path
 from .converter import ConversionError
 from .converter.export import AssetBundle, convert_native
 from .converter.native import NativeInputError, load_model, read_model_mesh_names
-from .selection import SelectionError, index_event_files, select_native_view
+from .selection import SelectionError, index_event_files, resolve_outfit_eye_owner, select_native_view
 from .interactions import InteractionError, prepare_interactions, resolve_eye_meshes
 from .native_emitter import load_native_emitter
 from .additional import prepare_additional_actor, attach_additional_actor
@@ -31,7 +31,8 @@ if TYPE_CHECKING:
     from luna_kit.typings import DefaultGameCampaignType
 
 
-def _render_override(campaign: DefaultGameCampaignType, category: str, identity: str) -> bool:
+def _render_override(campaign: DefaultGameCampaignType, category: str, identity: str, *,
+                     fields: set[str] | None = None) -> bool:
     """Do not invent merge semantics for new visual campaign overrides."""
     data = campaign.get('game_object_data', {})
     if not isinstance(data, dict) or not isinstance(data.get(category, {}), dict):
@@ -39,13 +40,14 @@ def _render_override(campaign: DefaultGameCampaignType, category: str, identity:
     override = data.get(category, {}).get(identity, {})
     if not isinstance(override, dict):
         raise ValueError('Unsupported campaign object override structure')
-    fields = {'Model', 'MediumLOD', 'Rig_MediumLOD', 'Animation', 'AnimationEventsXML',
+    all_visual_fields = fields is None
+    fields = fields if fields is not None else {'Model', 'MediumLOD', 'Rig_MediumLOD', 'Animation', 'AnimationEventsXML',
               'Eyes', 'Sets', 'SubSets', 'Parts', 'ModelName', 'LinkedPart',
               'AdditionalObject', 'Conversation', 'IdleAnimation', 'AnimationIdle', 'Type',
               'AnimationWalk', 'AnimationRun', 'AnimationEditorIdle', 'Special_AI', 'UserVector'}
     def visit(value: object) -> bool:
         if isinstance(value, dict):
-            return any(k in fields or k.endswith('AnimationList') or visit(v) for k,v in value.items())
+            return any(k in fields or (all_visual_fields and k.endswith('AnimationList')) or visit(v) for k,v in value.items())
         if isinstance(value, list):
             return any(visit(v) for v in value)
         return False
@@ -168,9 +170,19 @@ def generate_models(native_objects: GameObjectData, extracted_dir: str | Path, d
                     selection_category = 'Pony' if category == 'PonySet' else category
                     if category == 'PonySet' and _render_override(campaign, selection_category, owner_id):
                         raise SelectionError('campaign_visual_override_unverified', 'Owner visual override requires review')
-                    obj = native_objects[selection_category][owner_id]
                     model_name = association['model']
                     rk_model = prepare_model(model_name)
+                    if category == 'PonySet' and not part_preview:
+                        resolved_owner = resolve_outfit_eye_owner(identity, owner_id,
+                            [oid for oid in association['owners'] if report['identities'][oid]['references_resolved']],
+                            native_objects, report['models'][model_name]['meshes'])
+                        if resolved_owner != owner_id:
+                            if _render_override(campaign, selection_category, resolved_owner):
+                                raise SelectionError('campaign_visual_override_unverified', 'Render owner visual override requires review')
+                            association.update(public_owner=owner_id, owner=resolved_owner,
+                                               owner_source='native-model-eye-context')
+                            owner_id = resolved_owner
+                    obj = native_objects[selection_category][owner_id]
                     child = report['identities'][owner_id].get('additional_actor', {})
                     child_model = None
                     if child.get('references_resolved') and child['resource_stem'] not in additional_cache:
@@ -188,6 +200,9 @@ def generate_models(native_objects: GameObjectData, extracted_dir: str | Path, d
                         display_profile=display_profile, event_files=event_files,
                         **({'allow_additional_actor': True} if prepared_additional is not None else {}))
                     wardrobe = selection['provenance'].get('wardrobe') or {}
+                    if any(_render_override(campaign, 'Pony', source, fields={'MediumLOD','Sets','SubSets'})
+                           for source in wardrobe.get('shared_model', {}).get('sources', [])):
+                        raise SelectionError('campaign_visual_override_unverified', 'Shared model wardrobe registration requires review')
                     part_ids = wardrobe.get('part_ids', [])
                     if part_preview:
                         part_ids = [*part_ids, *(part['id'] for part in association['parts'].values())]
